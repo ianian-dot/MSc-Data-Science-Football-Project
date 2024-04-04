@@ -1,0 +1,2874 @@
+---
+date: Summer 2023 
+output:
+  bookdown::pdf_document2:
+    latex_engine: xelatex
+    toc: true 
+    fig_caption: yes
+  pdf_document: default
+title:  |
+  | \vspace{1.5cm}  Modelling yellow cards in football games \vspace{0.3cm}
+  | \small Word Count: 13380 (wordcountaddin)   \vspace{1cm}
+subtitle: |
+  | MSc Data Science (Statistics), University College London \vspace{0.3cm}
+author:  | 
+  | Candidate Number XPBN7 (Supervised by Dr Abourashchi Niloufar) \vspace{0.3cm}
+bibliography: mscproject_references.bib
+header-includes:
+  - "\\usepackage{longtable}"
+abstract: "In this project, we look at the highly stochastic football yellow card variable and aim to model them using statistical and machine learning methods. The dataset provided by Smartodds, a betting consultancy, allows us to use predictors such as market odds for goal supremacy and total goals, as well as others such as attendance, stadium capacity, etc.  Through data exploration we notice generally weak but possibly linear relationships between the outcome and the predictors. We first employ 'simpler' linear models, then with Poisson log-link models, before incorporating mixed effects to account for repeated measurements of teams and referees. In a bid to improve predictability, we use random forests and gradient boosted models, and finally tested a combination of the latter with mixed effects through Sigrist's (2020) GPBoost model. In terms of predictive power on a test set, random forests and GPBoost performed the best, although the linear models LM and LMM (Linear Mixed Effects Model) were very close behind, while the 'Generalised' log-link versions and gradient boosted models vastly underperformed. Upon pre-processing the numeric predictors with Principal Component Analysis (PCA) to reduce the dimensionality of the feature space, and to mitigate multicollinearity, linear models had slight improvements which allowed them to overtake random forests. An analysis of residuals however shows that the models systematically overpredict low values and underpredict higher values of yellow card, most likely as a result of omitted variables and the highly random nature of yellow cards. "
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_knit$set(root.dir = "OneDrive - University College London/Postgrad/Masters/MSc DS/Modules_/Project/")
+knitr::opts_chunk$set(echo = F, fig.align = "center", warning = F, message = F, fig.pos = 'H')
+options(dplyr.summarise.inform = FALSE)
+
+## Source separate file for functions 
+source("../testing/msc_functions.R")
+
+## Key libraries
+library(tidyverse)
+library(gridExtra)
+library(kableExtra)
+library(ggpubr)
+```
+
+# Introduction 
+
+## Football as a sport (a.k.a soccer, association football)
+
+Football is a global sport and is enjoyed by 3.5 billion fans across the globe and 250 million players across 200 countries [@WorldPopulationReview2023]. Thus it has unsurprisingly churned out a huge betting market that is worth billions of dollars - ex-Footballer Joey Barton even quipped that 'half of pro-footballers' gamble, and that it is 'culturally ingrained' in the sport [@bbc2018barton]. With such a big market comes many different betting options, and bettors have evolved from betting on match outcomes and scores to various aspects of the game, such as events surrounding specific players, such as yellow and red cards. Betters in the UK can access an abundance of betting websites, with a lot of companies, such as BET365, sponsoring football teams. 
+
+Football is famously very stochastic and hard to predict - as described by @Eryarsoy2019, football is very much in 'analytical backwaters', due to the sport's 'highly dynamic nature', with a seemingly infinite variables and their interactions that could determine the outcome of a match between two teams of 11 players, on a vast 105m by 68m pitch. In a bid to capture as much information as possible, companies such as Opta and Prozone have been formed, with the latter producing video-technology software that tracks footballers on the pitch, generating thousands of datapoints per player per game (The Wired UK, 2017). Thus the avenue for data science in football is huge, with emerging clubs like Brighton known for their 'money-ball' strategies for recruitment. 
+
+Apart from betting, whereby betting houses need to predict odds as precisely as possible to generate profits to bettors who simply want to predict the card counts, analysing cards is of great interest to teams and coaches, especially since it could drastically affect the scoring ability of teams and outcome of matches [@Badiella2022]. Coaches may be interested in the different team and referee effects on the card counts, and possibly use such information to adjust their tactics and strategies. 
+
+Although supplied with both card data, this paper chooses to focus on modelling and predicting yellow cards. As we will see, red cards distributions are zero-inflated and require a different approach for modelling. The much wider distribution of yellow cards provides much more breadth in terms of model selection and warrants a lot of focus in analysis. 
+
+## Football Rules, Referee, Cards 
+
+Under the *Laws of the Game* [@Wikipedia2023], which are the codified rules for association football and are maintained by the International Football Association Board, yellow and red cards fall under the 'Fouls and Misconduct' section of the rule book. Fouls are actions that go against the game's laws and interfere with the progression of the game, and mostly involve overly-aggressive actions on the pitch. On the other hand, misconduct are more disciplinary in nature can occur anytime during the game, not only during play. 
+
+To track offenses and misconducts, yellow cards are handed out from list of actions, such as delaying the restart of the play (misconduct) or a reckless tackle with the intention of stopping the opponent's progression (foul). For graver offenses, a red card is shown to a player who is to be sent off from the pitch, forcing the team to play on with one fewer teammate. Possible misconducts include deliberately denying a goal scoring opportunity with a foul or a handball, and highly dangerous fouls such as tackling with the studs or two-legged slide tackles warrant a direct red card. Players can also be sent off if they accumulate two yellow cards (equivalent to a red card).  
+
+Logically and as we will come to see, red cards occur very rarely and much less often compared to yellow cards. 
+
+# Surrounding literature 
+
+## Literature on yellow/red cards 
+
+### Referee bias 
+
+When it comes to cards, referees take a lot of heat. Referee bias is often seen as a large factor around the awarding of red and yellow cards, with football fans often holding unfavourable opinions of certain referees - the revered manager Jurgen Klopp was fined following comments questioning referee Paul Tierney's judgement and impartiality towards Liverpool Football Club (The Guardian, 2023). 
+
+In an ideal world, the awarding of cards is objective, and solely dependent on the specific footballing foul incident on the pitch. Unfortunately (or fortunately for our research purpose), there are many external factors that affect the refereeing decision. Referees are forced to make quick decisions that come with huge ramifications for the teams involved, and this stressful environment forces them to resort to heuristics and makes them prone to cognitive biases [@AlanNevill2022].
+
+**Referee Idiosyncracies**
+
+Research by @Boyko2007 strongly purports the different effect referees have on games, such as goal advantage and more crucially yellow cards and penalties, aligning with the idea that a lot of outcomes are the result of idiosyncrasies of referee decisions and disciplinary types. Furthermore, research on almost 4 decades of Australian rubgy reveals that home advantage was the most likely form of 'unconscious bias', and the advantage of playing at home had a large variance, with clubs faring differently under different referees [@OBrien2021].
+
+A paper in BMC Psychology by @McCarrick2020 that focused on referee height as the main predictor reveals that while there was no significant correlation between height and number of fouls, across the top 4 leagues in the UK, shorter referees tended to award more yellow cards, possibly due to the psychological phenomenon of the "Napolean Syndrome" whereby shorter men compensate for the 'lack of height and social dominance'. Interestingly however, although there was a correlation with red cards, the direction differed between the lower and upper leagues, with taller referees awarding more in the Premier League and fewer in the lower leagues. 
+
+### Home advantage 
+
+As with the familiar home advantage in terms of goals, studies have indicated a home team favouritism in referee decisions, which include yellow and red cards. A study by @BuraimoForrestSimmons2010 on the English and German top-flight league revealed that despite controlling for variables such as within-game events and other pre-game factors, via the use of a minute-by-minute bivariate probit model, there was a systematic bias in treatment of home and away teams in favour of the former. Crucially, they controlled for main confounders of bookings, which were aggressive tactics by players, that would otherwise be masked as referee favouritism. In Spain, where @Picazo2011 examined home-bias data from seasons 2002/3 and 2009/10, they discovered that referees favoured the home team not in terms of free kicks/fouls but in terms of bookings, which comes after blowing the whistle to call for the foul. 
+
+**Home crowd advantage**
+
+A common cause of home advantage lies in the home crowd effect. In an interesting psychological-experiment type set up, [@NEVILL2002261] let a group of referees watch videotaped football incidents but muted the crowd noise for half of them. The group with noise called for 15.5% less fouls on the home team, resembling the decisions of the actual referees. Interestingly, referees award more fouls for the away team as the number of years of experience increases, but drops after a certain point (16 years), possibly indicating **referee experience** has a (non-linear) effect on the home-bias. 
+
+As in the aforementioned studies by @Picazo2011 and @McCarrick2020, referees seem to be objective and quick in calling fouls, but the decision to book the player afterwards may be heavily affected by crowd pressure. 
+
+Other research on ice-hockey by @agnew1994crowd argue that crowd *density* is the most important predictor, and proxy factors such as distance from field-to-stand, e.g. through the presence of a running track, ultimately affect the number of yellow cards through crowd-influence in Germany football matches [@unkelbach2010crowd]. 
+
+### Effects of Covid-19
+
+Even before the impact of Covid-19, research has shown that the sudden lack of fans when matches are played behind closed doors in Italy (due to regulation following a violent incident) drastically reduced home advantage in terms of punishments for the away side [@PETTERSSONLIDBOM2010212].
+
+Covid-19 then provided a unprecedented opportunity of a natural experiment to observe the effects of empty stadiums across different countries. @BRYSON2021109664 examined the 2019/20 season and found that difference in home and away yellow cards was reduced by a third of a card which was not accounted for by regular crowd variation. The authors concluded via the use of linear regression (found no significant differences with an equivalent Poisson regression) that the effect on the card differential was most likely due to referee effects since empty stadiums had no significant influence on the match outcomes (home win etc). 
+
+### Big team bias 
+
+Research also shows that referees are influenced by the 'size' of the club, which may be correlated or confounded by factors such as crowd pressure. @audrino2020 found strong evidence in favour of a 'strong team bias' in all top flight leagues except that of France, with slightly different variations: English referees award more yellow cards to the strong team's opponent, while elsewhere (Spain, Italy, Germany) they penalise the strong team less. 
+
+### Team playing style 
+
+As the research on the Spanish league by @Picazo2011 have shown, a statistically significant indicator predicting referee bias in terms of differential fouls and bookings was the difference in ball possession and the number of shots taken between the teams. When teams held onto the ball more, and were more direct in attacking, they drew fewer fouls. Hence we can expect teams to have a varying level of `team effects` on yellow cards.
+ 
+## Literature on goal modelling
+
+Most statistical modelling research papers on football centre around goal modelling. Teams aim to win matches in order to progress in tournaments (e.g. knock-out stages in League cups) or to gain points to climb league positions, and they do this by outscoring the opposition. Both goals and cards are count variables, and we will touch briefly on the research on the former. 
+
+Among popular research, one of the earlier papers came from @maher1982 who used Poisson distribution to model football goals, incorporating attack and defence from each team, via both independent and Bivariate Poisson distributions which allowed for some correlation between the home and away team goals. Next, the @Dixon1997 model tried to improve on the prediction power of goal models by adjusting for low scoring matches, which they believed was being underestimated by standard bivariate Poisson models, by reformulating the likelihood function. @karlis2003 also used a bivariate Poisson distribution and considered an 'inflation factor' to improve the prediction of draws and overdispersion. Lastly, @Baio2010 replaced the frequentist framework with a Bayesian hierarchical model, which naturally accounts for goal covariance, and was shown to not be inferior, without requiring a specific algorithm curated for goal modelling.
+ 
+# Exploratory Analysis
+
+## The data as supplied by SmartOdds
+
+```{r read-clean-reshape-data, echo=FALSE, include=FALSE}
+## Read in the CSV file
+raw_data <- read.csv("MScCardsDatasetNew.csv")
+#raw_data <- read.csv("/Users/iantan/Library/CloudStorage/OneDrive-UniversityCollegeLondon/Postgrad/Masters/MSc DS/Modules_/Project/MSc Project Data/MScCardsDataset.csv")
+
+## Explore 
+head(raw_data)
+colnames(raw_data)
+nrow(raw_data)
+# [1] "X"                 "fixture_id"        "season"         
+# [4] "season_start_date" "season_end_date"   "country"          
+# [7] "league"            "competition_level" "kick_off_datetime"
+# [10] "team1_name"        "team2_name"        "referee"          
+# [13] "sup_implied"       "tg_implied"        "team1_yc"         
+# [16] "team2_yc"          "team1_rc"          "team2_rc"         
+# [19] "team1_bk"          "team2_bk"          "bksup"            
+# [22] "bktot"  
+summary(raw_data)
+str(raw_data)
+
+######### Cleaning Dataset ####################################################
+library(stringr)
+## First column doesnt provide any value - remove 
+raw_data_2 <- raw_data
+
+## Convert datetime variable to date format 
+typeof(raw_data_2$kick_off_datetime)
+raw_data_2$kick_off_datetime <- as.Date(raw_data_2$kick_off_datetime, format = "%Y-%m-%d %H:%M:%S")
+
+# Extract out the date only 
+raw_data_2$match_date <- as.Date(raw_data_2$kick_off_datetime)
+
+## Convert season_end_date to date format 
+raw_data_2$season_end_date <- as.Date(raw_data_2$season_end_date, format = "%Y-%m-%d")
+
+## Create a season_end_year column to get the Season Year data
+raw_data_2$season_end_year <- as.numeric(str_sub(raw_data_2$season, start = -4L))
+
+## Convert some to factors 
+raw_data_2 <- raw_data_2 %>% mutate(competition_level = as.factor(competition_level),
+                      referee = as.factor(referee), 
+                      team1_name = as.factor(team1_name),
+                      team2_name = as.factor(team2_name), 
+                      league = as.factor(league),
+                      country = as.factor(country))
+
+######## INSERT NEW COLUMNS: CAPACITY, RUNNING TRACK, STADIUM DISTANCE 
+augmented_data <- read.csv("MScCardsDatasetNew_stadium_distance.csv")
+raw_data_2 <- raw_data_2 %>%
+  left_join(select(augmented_data, fixture_id, team2_stadium_dist, stadium_capacity, stadium_runningtrack, stadium_altitude), by = "fixture_id")
+
+######## GENERATE NEW CROWD DENSITY COLUMN #####################################
+head(raw_data_2)
+raw_data_2 <- raw_data_2 %>% mutate(crowd_density = attendance_value/stadium_capacity)
+
+######### Reshaping Dataset ####################################################
+## Reshape the table such that there is one column for teams (every match is repeated twice)
+data_2_reshaped <- 
+rbind(
+  ## Home team
+  data.frame(team=raw_data_2$team1_name,
+             opponent=raw_data_2$team2_name,
+             home=1,
+             yellow_cards=raw_data_2$team1_yc, 
+             red_cards=raw_data_2$team1_rc,
+             opposition_yc = raw_data_2$team2_yc,
+             referee = raw_data_2$referee,
+             country = raw_data_2$country,
+             season = raw_data_2$season_end_year,
+             competition_level = raw_data_2$competition_level,
+             total_bookings = raw_data_2$team1_bk,
+             supremacy_implied = raw_data_2$sup_implied,
+             total_goals_implied = raw_data_2$tg_implied,
+            match_date = raw_data_2$match_date,
+            attendance = raw_data_2$attendance_value,
+            stadium_dist = 0,
+            stadium_capacity = raw_data_2$stadium_capacity,
+            stadium_runningtrack = raw_data_2$stadium_runningtrack,
+            stadium_crowd_density = raw_data_2$crowd_density
+            ),
+  ## Away team
+  data.frame(team=raw_data_2$team2_name,
+             opponent=raw_data_2$team1_name,
+             home=0,
+             yellow_cards=raw_data_2$team2_yc, 
+             red_cards=raw_data_2$team2_rc,
+             opposition_yc = raw_data_2$team1_yc,          
+             referee = raw_data_2$referee,
+             season = raw_data_2$season_end_year,
+            competition_level = raw_data_2$competition_level,
+             country = raw_data_2$country,
+             total_bookings = raw_data_2$team2_bk,
+             ## For supremacy implied, since it is directional (i.e. home - away), we flip it around with a negative sign
+             supremacy_implied = -raw_data_2$sup_implied,
+             total_goals_implied = raw_data_2$tg_implied,
+            match_date = raw_data_2$match_date,
+            attendance = raw_data_2$attendance_value,
+            stadium_dist = raw_data_2$team2_stadium_dist,
+            stadium_capacity = raw_data_2$stadium_capacity,
+            stadium_runningtrack = raw_data_2$stadium_runningtrack,
+            stadium_crowd_density = raw_data_2$crowd_density))
+
+```
+
+The data, which has been supplied by SmartOdds(TM), consists originally of the following columns/variables: `r colnames(raw_data_2)`, with a total of `r nrow(raw_data_2)` observations. It consists of the top 2 leagues across the "Big Five" European countries for football, from the seasons 2014/15 up till 2021/22. Each row consists of one single match, reflecting the home team and away team, and the relevant statistics for both teams. 
+
+To convert the dataset to one where there is only one single yellow cards column, we reformulate the dataset into one that is twice as large where each match now becomes two - each from the point of view of both teams, and an additional column for the `home` indicator variable is introduced. We adjusted the `sup_implied` for the away team to be negative, while that of the home team is untouched, as per the original definition. This allows us to model the yellow card for a particular team, with everything else (including home) used as predictors. 
+
+For reference, 
+
+* sup_implied : Implied goal supremacy 
+* tg_implied : Implied total goals 
+* YC : Yellow Cards
+
+The definition, given by Smartodds:
+
+* sup_implied and tg_implied : a translation of the available Asian handicap odds for these matches into what we believe the market was expecting for (home) goals supremacy and total goals in the match
+
+These 'implied' data are uniquely supplied by Smartodds, a betting consultancy, and potentially provide interesting insights into card prediction.
+
+Most other columns are self-explanatory. Some were introduced later as an updated dataset, and to prevent confusion, they include: 
+
+* stadium_dist : Distance traveled by the away team for the match, i.e. distance from both stadiums of the home and away team. If small, this could represent geographical rival clubs. 
+
+* stadium_runningtrack : Presence of a running track around the football pitch, representing a buffer between the pitch and the spectators. 
+
+## Our predictors 
+
+```{r basic-exploration,results='hide', message=FALSE}
+## suppress messages
+options(dplyr.summarise.inform = FALSE)
+
+
+######### Basic data exploration ###############################################
+## Col1 : League-----------------------------------------------------------------
+# table(raw_data_2$league)
+raw_data_2$league <- as.factor(raw_data_2$league)
+
+## Col2: Season -----------------------------------------------------------------
+# table(raw_data_2$season)
+# table(raw_data_2$season_end_year) # -- we have data from 2015 to 2019 seasons, quite evenly spread 
+
+## Col3: Country -----------------------------------------------------------------
+raw_data_2$country <- as.factor(raw_data_2$country)
+# raw_data_2 %>% group_by(country) %>% count(league) # -- for Spain, SpaPr represents LaLiga1 and SpaSe represents LaLiga2
+
+#- Plot1: Country and League
+plot2.1 <- raw_data_2 %>% group_by(country) %>% count(competition_level) %>% 
+  ggplot(aes(x = country, y =n, fill = (competition_level))) + 
+  geom_col(position = position_dodge(), width = 0.7) +
+  labs(title = "League Count by Country", x = "Country", y = "Count") +
+  ## Position legend on top while mimic theme_bw 
+  theme(legend.position = "top",
+        panel.background = element_blank(),
+        panel.grid.major = element_line(color = "gray", linetype = "dashed"),
+        plot.title = element_text(size = 10),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8)) +
+  guides(fill = guide_legend(title = "Competition Level"))+ 
+  scale_y_continuous(breaks = seq(0,3000, 500)) +
+    theme(legend.text = element_text(size = 6),
+        legend.title = element_text(size = 6),
+        legend.key.size = unit(0.5, "cm"))
+
+## Col4: Referees-----------------------------------------------------------------
+raw_data %>%
+  group_by(referee) %>%
+  count() %>%
+  arrange(n) %>%
+  mutate(bin = cut(n, breaks = 10)) %>%
+  select(bin, referee, n) %>%
+  pivot_wider(names_from = referee, values_from = n)
+
+#- referees by country (how many from each country)
+referee_by_country <- raw_data_2 %>% group_by(country, competition_level) %>% summarise(no_referees = n_distinct(referee),
+                                               no_games = n(), 
+                                               percentage_of_total_referees = round( no_referees/length(unique(raw_data_2$referee)), 3)*100)
+
+#- Plot2: Referees by country 
+plot2.2 <- ggplot(referee_by_country, aes(x = reorder(country, - percentage_of_total_referees), y = no_referees, fill = competition_level)) +
+  geom_col(position = position_dodge(), width = 0.7) + ## use geom_bar
+  labs(x = "Country", 
+       y = "Total no. Referees", 
+       title = "No Referees from each Country") +
+  theme_classic() + 
+  scale_y_continuous(breaks = seq(0,40,5))+
+  guides() +
+  theme(plot.title = element_text(size = 10),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8),
+        legend.position = 'bottom')
+
+#- Plot2.2: Number of games per referee
+plot2.4 <- raw_data_2 %>% filter(!is.na(referee))%>%count(referee, country)%>% arrange(desc(n)) %>% ggplot(aes(n, fill = country)) + geom_histogram(binwidth = 5) +
+  scale_x_continuous(breaks = seq(0,200,10)) +
+  labs(x= 'No. games per referee', title = 'Distribution of Ref experience') +
+  theme_classic()   +
+  theme(plot.title = element_text(size = 10),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8))
+
+
+## Col4: Teams-----------------------------------------------------------------
+# - No. teams in total
+teams_by_country <- data_2_reshaped %>% group_by(country, competition_level) %>% summarise(no_teams  = n_distinct(team))
+  
+plot2.22 <- ggplot(teams_by_country, aes(x = reorder(country, - no_teams), y = no_teams, fill = competition_level)) +
+  geom_col(position = position_dodge(), width = 0.7) + ## use geom_bar
+  labs(x = "Country", 
+       y = "Total no. Teams", 
+       title = "No. Teams from each Country") +
+  theme_classic() + 
+  scale_y_continuous(breaks = seq(0,40,5))+
+  guides() +
+  theme(plot.title = element_text(size = 10),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8))
+
+plot2.42 <- data_2_reshaped %>% count(country, team)%>% arrange(desc(n)) %>% ggplot(aes(n, fill = country)) + geom_histogram(binwidth = 20) +
+  scale_x_continuous(breaks = seq(0,200,10)) +
+  labs(x= 'No. games per team', title = 'Distribution of team games') +
+  theme_classic()   +
+  theme(plot.title = element_text(size = 10),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8))
+
+## Col5: Sup Implied and TG Implied -----------------------------------------------------------------
+
+
+# - using raw data
+plot2.3 <-raw_data_2 %>% filter(!is.na(sup_implied), !is.na(tg_implied)) %>%
+  ggplot() +
+  geom_histogram(aes(x = sup_implied, fill = "Supremacy", y = ..density..), alpha = 0.5, bins = 30, color = 'black') +
+  geom_density(aes(x = sup_implied, color = "Supremacy"), size = 1, bw = 0.2) +
+  geom_histogram(aes(x = tg_implied, fill = "Total Goals", y = ..density..), alpha = 0.5, bins = 30, color = 'black') +
+  #geom_density(aes(x = tg_implied, color = "Total Goals"), size = 1, bw = 0.2) +
+  ## Add a vertical line
+  geom_vline(xintercept = mean(raw_data_2$sup_implied, na.rm = T), color = "darkblue", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = mean(raw_data_2$tg_implied, na.rm = T), color = "darkred", linetype = "dashed", size = 1) +
+  labs(title = "Implied Supremacy and Total Goals",
+       x = "Variable", y = "Density/Frequency") +
+  scale_fill_manual(name = "Variable", values = c("Supremacy" = "blue", "Total Goals" = "red")) +
+  scale_color_manual(name = "Variable", values = c("Supremacy" = "blue", "Total Goals" = "red")) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8),
+        legend.position = 'top' ) +
+  scale_x_continuous(breaks = seq(-4,5,1)) +
+    theme(legend.text = element_text(size = 6),
+        legend.title = element_text(size = 6),
+        legend.key.size = unit(0.5, "cm"))
+
+## boxplot to see skewness
+
+## Col6: Attendance figures  -----------------------------------------------------------------
+# plot2.5 <- raw_data_2 %>% select(attendance_value, country) %>% ggplot(aes(x = attendance_value, fill = country)) + geom_histogram() +
+#   theme_classic()
+
+## Get country means 
+mean_values <- raw_data_2 %>% 
+  group_by(country) %>% 
+  summarise(mean_attendance = mean(attendance_value, na.rm = TRUE),
+            se = sd(attendance_value, na.rm = TRUE))
+
+## Attendance by countries violin plot 
+plot2.6 <-raw_data_2 %>% 
+  select(attendance_value, country) %>% 
+  ggplot(aes(x = country, y = attendance_value)) +
+  geom_violin(aes(fill = country)) + 
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
+  geom_point(data = mean_values, aes(x = country, y = mean_attendance), color = "red", size = 3, shape = 'x') +
+  labs(y = "Attendance", x = "Country", title = "Attend. over countries", caption = "(red x: country mean)") +
+  guides(fill = 'none')+
+    theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))  
+
+## Add time component
+avg_attendance <- raw_data_2 %>% 
+  group_by(country, season_end_year) %>% 
+  summarise(avg_attendance = mean(attendance_value, na.rm = TRUE))
+
+## Time series of attendance over seasons
+plot_2.7_attendane_timeseries_covid <-ggplot(avg_attendance, aes(x = season_end_year, y = avg_attendance, color = country)) +
+  geom_point()+
+  geom_line() +
+  theme_classic() +
+  labs(x = "Season", y = "Average Attendance", color = "Country", title = "and seasons") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#### COVID IMPACT ON ATTENDANCE
+
+## Which seasons do the 0s come from?
+plot_2.72_covid <- raw_data_2 %>%
+    filter(match_date >= as.Date("2020-01-01") & match_date <= as.Date("2022-12-31")) %>%
+  group_by(country, match_date) %>%
+  summarise(avg_attendance = mean(attendance_value, na.rm = TRUE)) %>%
+  ggplot(aes(x = match_date, y = avg_attendance, color = country)) +
+  geom_point(size = 0.5) +
+  #geom_line() +
+  labs(x = "Date", y = "Average Attendance", color = "Country",
+       title = "Impact of Covid") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 10, vjust = 0.5)) 
+
+## Col7: Crowd density  -----------------------------------------------------------------
+plot2.8_crowd_dens <- raw_data_2 %>% ggplot(aes(x = crowd_density, y= 0, color = crowd_density)) + geom_count()  + labs(title = "Distribution of crowd density (attendance/capacity)", x = 'Crowd density', y = "") +
+  theme(legend.title = element_text(size = 0.0),
+        legend.text = element_text(size = 0.0),
+        legend.key.width  = unit(0.0, "cm"))+ ## REDUCE LEGEND SIZE 
+  theme_minimal() 
+  
+
+## Col8: Running tracks  -----------------------------------------------------------------
+plot.9_runningtrack <- raw_data_2 %>% ggplot(aes(x = as.factor(stadium_runningtrack), fill = country)) + geom_bar() +
+  labs(x = "Presence of running track")+
+  theme(legend.title = element_text(size = 1),
+        legend.text = element_text(size = 1)) +
+  theme_minimal()
+
+## remove data
+rm(raw_data, augmented_data)
+```
+
+```{r univariate-exploratory-plots-1, fig.cap="Competition levels across countries, distribution of implied data", out.width="80%", fig.pos='h'}
+library(patchwork)
+(plot2.1 | plot2.3) 
+
+```
+
+
+**Country and league**
+
+From Fig \@ref(fig:univariate-exploratory-plots-1), we have data on 5 countries: `r unique(raw_data_2$country)`, each with their top two leagues (`r unique(raw_data_2$league)`).
+Of note: There is considerably less data for the 2nd Italian league (Serie B) compared to other leagues, and the most number of data points from the UK Championship. 
+
+
+**Implied Supremacy and Total Goals**
+
+We are provided with `sup_implied` and `tg_implied`, which are what the markets expect the goal supremacy (how much home team wins by) and total goals to be. The range of supremacy and total goals are : `r round(range(raw_data_2$sup_implied, na.rm = T),2)` and `r round(range(raw_data_2$tg_implied, na.rm = T),2)`
+
+  * The `sup_implied` closely resembles a normal distribution centered around `r mean(raw_data_2$sup_implied, na.rm = T)` > 0 with a standard error of `r sd(raw_data_2$sup_implied, na.rm = T)`, indicating a slight home advantage.
+
+  * The `tg_implied` resembles more of an exponential type distribution, since it cannot be negative (sample minimum around 1.6). The mean total goals is `r round(mean(raw_data_2$tg_implied, na.rm = T),2)`. 
+
+
+```{r univariate-exploratory-plots-2-ref, fig.cap="Referees", out.width="80%"}
+plot2.2|plot2.4 + scale_x_continuous(breaks = seq(0, 200, 50))
+```
+
+**Referees**
+
+There are a total of 217 referees, of which a large proportion of them are from the UK (35+%), followed by Germany and France (~20%), and then Spain and Italy (~12%). Referees with a lot of games come from England, but overall there is a large spread, with some having fewer than 20 or 30 matches, while other with more than 200. Hence we have a large number of referees with a stark imbalance of samples between them, which will guide our modelling approach down the line. 
+  
+```{r univariate-exploratory-plots-22-teams, fig.cap="Teams", out.width="80%"}
+plot2.22 + theme(legend.position = "bottom")| plot2.42 + scale_x_continuous(seq(0,400,50))
+```
+
+
+**Team**
+
+There are a total of `r length(unique(as.factor(data_2_reshaped$team)))` teams across all competitions. Across countries, there are more teams in the second league than first, potentially due a higher turnover from teams being promoted upwards and relegated downwards, the former being not possible in the top league. Teams effects are vital as some may employ tactics that lead to more fouls and hence cards than others. As with referees, we have some teams with few games and many with more than 250. Again, England has the largest spread of number of team games. 
+
+
+```{r univariate-exploratory-plots-3, fig.cap="Attendance", out.width="100%"}
+plot2.6|plot_2.7_attendane_timeseries_covid/plot_2.72_covid
+```
+
+
+**Attendance and covid effects** 
+
+A first glance at the distribution of attendance rates across the countries show a significantly varying number of fans in stadiums, with countries like England and Germany having the higher averages and right skew, with a relatively larger proportion of attendance rates above 50000. One the other hand, France, Italy and Spain are a lot heavier on the bottom of the attendance scale, with much lower averages and a lot of mass below 25000, although it should be noted that Spain has the highest upper limit (most right skew), possibly due to their renowned high-capacity Camp Nou stadium that attracts the largest crowds in the world. 
+
+The moving season average plot shows the comparison of means more clearly - it is almost always the case that Germany has the highest averages, follows by England, Italy, Spain and France. There is a falling trend towards 2021 due to Covid, before bouncing back. 
+
+The final plot zooms in on the Covid period where attendance was banned for safety reasons, and attendance remained 0 as games were played indoors (apart from some limited numbers occasionally). For simplicity, we will presume that the covid-ban lasted from March 2021 up till the start of the 2021/2 Season. 
+
+```{r univariate-exploratory-plots-4, fig.cap="Extra predictors: crowd density, running track", out.width="100%"}
+library(patchwork)
+plot2.8_crowd_dens|plot.9_runningtrack
+
+```
+
+**Crowd density**
+
+One of the important aspects of data visualisations is to spot outliers that may not be so salient in summary statistics. Logically all values of crowd density should fall between 0 and 1, hence we will set the values >1 to an upper limit of 1, which would be especially important for the anomalous observation of 28x stadium capacity attendance, which would otherwise be a high leverage point that could give biased estimates.  
+
+**Running track**
+
+Apart from England, a small number of clubs from each country contain a running track that provides a buffer between the spectators and the football pitch, possibly sheltering the referee from the home crowd effects.
+
+```{r}
+rm(plot2.1, plot2.2, plot2.4, plot2.22, plot2.6, plot_2.72_covid, plot2.8_crowd_dens, plot.9_runningtrack)
+```
+
+
+## Summary of predictors: 
+
+![Summary of datatypes for predictors](YC_predictors.drawio.png){width=100%}
+
+As a summary, we have 3 main types of predictors: numeric, categorical, and high cardinality categorical. The presence of the latter will influence our choices of models. 
+
+## Missing data 
+
+```{r missing-data-analysis, fig.cap="Missingness by factors",echo=F, fig.align='center',out.width = "70%", warning=FALSE, fig.pos="H"}
+######### Missing Data Analysis ####################################################
+## Rows of missing data 
+# kable(data_2_reshaped %>% count('Implied TG Missing' = is.na(total_goals_implied),
+#                           'Implied Sup Missing' = is.na(supremacy_implied),
+#                                 'Referee Data Missing' =   is.na(referee)) %>% 
+#   mutate("% of total" = round((n / sum(n))*100,1)), 
+#   caption = 'Missingness Table') %>% kable_classic()
+
+## Visualise missingness
+ggmice::plot_pattern(data_2_reshaped, rotate = T)
+
+
+#################################################
+## Where is the missingness coming from? -- PLOTS
+## --- Missing 1: By country/league
+missing_by_country_league <- raw_data_2 %>% group_by(country, league) %>% 
+  summarise(missing_count_referee = sum(is.na(referee)),
+            missing_count_TG_SUP =  sum(is.na(tg_implied))) 
+
+missing_by_country_league_long <- missing_by_country_league %>% 
+  pivot_longer(cols = c(missing_count_referee, missing_count_TG_SUP),
+               names_to = "variable",
+               values_to = "missing_count")
+
+# - Plot 1: Missing by country/league
+plot1.1 <- ggplot(missing_by_country_league_long) +
+  geom_bar(aes(x = league, y = missing_count, fill = variable), stat = "identity", position = "dodge") +
+  labs(title = "Missingness by country and league",
+       x = "League", y = "Missing Count") +
+  scale_fill_manual(name = "Variable", 
+                    values = c("missing_count_referee" = "lightblue", "missing_count_TG_SUP" = "darkred"),
+                    labels = c("Referee NA", "TG/Sup Implied NA")) +
+  theme_minimal()
+
+## --- Missing 2: By season
+missing_by_season_long <- raw_data_2 %>% group_by(season_end_year) %>% 
+  summarise(missing_count_referee = sum(is.na(referee)),
+            missing_count_TG_SUP =  sum(is.na(tg_implied))) %>%
+    pivot_longer(cols = c(missing_count_referee, missing_count_TG_SUP),
+               names_to = "variable",
+               values_to = "missing_count")
+
+plot1.2 <- missing_by_season_long %>% ggplot() +  geom_bar(aes(x = season_end_year, y = missing_count, fill = variable), stat = "identity", position = "dodge") +
+  labs(title = "Missingness by season", 
+       x = "Season", y = "Missing Count") +
+  scale_fill_manual(name = "Variable", 
+                    values = c("missing_count_referee" = "lightblue", "missing_count_TG_SUP" = "darkred"),
+                    labels = c("Referee NA", "TG/Sup Implied NA")) +
+  scale_x_continuous(breaks = seq(2015,2022,1))+
+  theme_minimal() 
+
+
+```
+
+```{r missing-analysis-2, fig.cap="Source of missingness", out.width='70%'}
+## Put plots in a grid 
+grid.arrange(plot1.1, plot1.2)
+```
+
+
+From Fig \@ref(fig:missing-data-analysis), 718 instances of datapoints are missing for the `Referee` column, while 12 are missing for `tg_implied` and `sup_implied`, which all come from the same observations (i.e. 'implied' NAs overlap fully). 
+
+The bulk of the missingness comes from referee NAs in the German leagues, and mostly during the more recent years: from 2020 to 2022. The missing implied data is isolated to the Italian second league in 2020.
+
+Due to the relatively small proportion of rows that contain missing data (less than 1.5%), it should not present an issue to our analysis. Since there are about 700+ missing referee data, we will replace it with a 'missing' placeholder that is further segmented by country (so as to capture some variance of referee behavior) and league, via "Missing - <Country> - <Competition Level>". This implicitly assumes there will be some variation between countries and leagues in terms of referee effects. For the implied columns, we will impute them with means of the specific league and country. 
+
+
+```{r simple-imputation, include=FALSE}
+## Take a look at rows with missing values
+data_2_reshaped[data_2_reshaped$stadium_crowd_density>1,]$stadium_crowd_density <- 1
+
+## Impute missing referees -- impute 'Missing + <Country> + <Level>'
+data_2_reshaped_imputed_1 <- data_2_reshaped %>% mutate(referee = if_else(is.na(referee), paste("Missing", country, competition_level, sep = "-"), referee))
+
+## Impute missing implied data -- Impute means from the season and country with missing implied 
+mean_values <- data_2_reshaped %>% 
+  filter(country == "Italy", competition_level == 2, season == "2020") %>% ## hard code since we know where missing implied data are from
+  summarise(total_goals_implied = mean(total_goals_implied, na.rm = TRUE), 
+            supremacy_implied = mean(supremacy_implied, na.rm = TRUE))
+## Fill in the missing implied 
+data_2_reshaped_imputed_2 <- data_2_reshaped_imputed_1 %>% mutate(
+  total_goals_implied = if_else(is.na(total_goals_implied), 
+                                as.numeric(mean_values[1]), 
+                                total_goals_implied), ## for total goals NA
+  supremacy_implied = if_else(is.na(supremacy_implied), 
+                              as.numeric(mean_values[2]),
+                              supremacy_implied))
+
+## CHECK -----------------------------------------------------------------------
+# Check imputed ref
+data_2_reshaped_imputed_1 %>% filter(str_detect(referee, "^Missing")) %>% count(referee)
+data_2_reshaped_imputed_2 %>% count(is.na(referee))
+# Check imputed implied
+data_2_reshaped_imputed_2 %>% count(is.na(total_goals_implied))
+
+```
+
+
+### Distribution of cards
+
+Cards represent a count variable which is discrete and non-negative. In most cases, a Poisson regression is used, with special extensions/adjustments in the presence of overdispersion.  
+
+
+```{r table1-red-vs-yellow}
+## Table of red and yellow card summary
+yellow_count_table <- data_2_reshaped %>% count(cards = yellow_cards) %>% rename(yellow_card_count = n)
+red_count_table <- data_2_reshaped %>% count(cards = red_cards) %>% rename(red_card_count = n)
+combined_table <- full_join(yellow_count_table, red_count_table) ## Combine yellow and red card count into one table 
+## Replace NAs with 0 
+combined_table$red_card_count <- ifelse(is.na(combined_table$red_card_count), 0, combined_table$red_card_count)
+names(combined_table) <- c("Card Count", "Yellow", "Red")
+
+## Make a nice table via kable
+# kable(combined_table, 
+#       caption = "Comparison of counts") %>% kable_classic(full_width = F) 
+
+## Make a nice table via ggtexttable
+ggtext_combined_table <- ggpubr::ggtexttable(t(combined_table),
+                                     theme = ttheme(base_size = 8, padding = unit(c(2, 2), "mm")))
+```
+
+```{r plot1-red-vs-yellow, fig.cap="Red and Yellow Card Histogram", out.width="60%", fig.align='center'}
+## Reshape data 
+card_type_long <- data_2_reshaped %>%
+  select(yellow_cards, red_cards) %>%
+  pivot_longer(cols = everything(), names_to = "card_type", values_to = "cards")
+
+## Yellow Red plot 2: Side by side
+card_dist_plot <- ggplot(card_type_long, aes(x = cards, fill = card_type)) +
+  geom_histogram(position = "dodge", binwidth = 1, color = 'black') +
+  labs(x = "Number of Cards", y = "Count", fill = "Card Type", title = "(Marginal) Card distribution") +
+  scale_x_continuous(breaks = seq(0,10,by=1)) +
+  scale_fill_manual(values = c("salmon", "lightyellow")) +
+  theme_classic()
+
+## Arrange card plot and table
+ggarrange(card_dist_plot, ggtext_combined_table, ncol = 1,
+          heights = c(2,1))
+
+```
+
+As seen from Fig \@ref(fig:plot1-red-vs-yellow), the range and spread of YC are much wider than that of the red cards, which is zero-inflated and tapers off quickly. The unconditional distribution of YC resembles a Poisson type. We fit and compare a Poisson and a Negative Binomial to the marginal distributions, and see little difference in Fig \@ref(fig:plot2-poisson-NB-fits).
+
+
+```{r plot2-poisson-NB-fits, fig.cap="Histogram of Yellow Cards, against Poisson and Negative Binomial fits", fig.align='center', out.width="70%"}
+## Look at the distribution of yellow cards
+summary(data_2_reshaped$yellow_cards)
+
+## Univariate histogram for yellow cards
+# data_2_reshaped %>% ggplot(aes(x = yellow_cards, y = ..density..,fill = home)) + 
+#     geom_histogram(
+#       position = 'identity',
+#       binwidth = 1, 
+#       fill = 'lightblue',
+#       color = 'black', 
+#       alpha = 0.7) +
+#     labs(title = 'Distribution of Yellow Cards', 
+#        y = 'Density',
+#        x = 'YC per match') +
+#   scale_x_continuous(breaks = 0:9) +
+#   theme_bw()
+
+## 1. Poisson -------------------------
+
+## Check to see if Poisson is a good fit? - Using MLE to get rate parameter
+yc_pois_mle_mean <- mean(data_2_reshaped$yellow_cards)
+## Manually find the PDF of Poisson given MLE of rate parameter 
+x_data <- 0:9
+fitted_poisson_density <- dpois(lambda = yc_pois_mle_mean, x = x_data)
+# Save as a df for easier plotting on ggplot
+fitted_distrs_df <- data.frame(x_data, poisson = fitted_poisson_density)
+
+## 2. Negative binomial -------------------------
+
+## Use fitdistr for negative binomial parameters 
+NB_estimated_params <- MASS::fitdistr(as.numeric(data_2_reshaped$yellow_cards),
+               densfun = 'negative binomial')$estimate
+NB_estimated_params
+## Manually find the PDF of NB given MLE  
+x_data <- 0:9
+fitted_NB_density <- dnbinom(size = NB_estimated_params[1],
+                             prob = (NB_estimated_params[1])/(NB_estimated_params[1] + NB_estimated_params[2]), ## via alternative parameterisation -- check ?dnbinom for details
+                             x = x_data)
+# Save as a df for easier plotting on ggplot
+fitted_distrs_df$NB <- fitted_NB_density
+
+## Plots 
+
+## Same histogram but with Poisson
+plot_1_pois <- ggplot(data = data_2_reshaped,
+       aes(x = yellow_cards, y = ..density..)) + 
+  ## Main histogram for YC  
+  geom_histogram(
+      position = 'identity',
+      binwidth = 1, 
+      fill = 'lightblue',
+      color = 'black', 
+      alpha = 0.7) +
+  ## Add points and line for POISSON FIT 
+  geom_point(data = fitted_distrs_df, aes(y = fitted_poisson_density, 
+                                x = x_data,color = 'Fitted Pois'),
+             
+            size = 2,
+            alpha = 0.7)+
+  geom_line(data = fitted_distrs_df, aes(y = fitted_poisson_density, 
+                                x = x_data),
+            color = 'orange', 
+            size = .7,
+            alpha = 0.7) +
+  theme(legend.position = 'bottom',
+    legend.text = element_text(size = 9),
+    panel.background = element_blank()) +
+  labs(title = 'Yellow Cards with Pois Fit', 
+       y = 'Density',
+       x = 'YC per game') +
+  scale_color_manual(values = c('red', 'blue'), 
+                     guide = guide_legend(title = '')) +
+  scale_x_continuous(breaks = 0:12)
+
+## Same histogram but with NB fit 
+plot_2_NB <- ggplot(data = data_2_reshaped,
+       aes(x = yellow_cards, y = ..density..)) + 
+  ## Main histogram for YC  
+  geom_histogram(
+      position = 'identity',
+      binwidth = 1, 
+      fill = 'lightblue',
+      color = 'black', 
+      alpha = 0.7) +
+  geom_point(data = fitted_distrs_df, aes(y = fitted_NB_density, 
+                                x = x_data,color = 'Fitted NB'),
+             
+            size = 2,
+            alpha = 0.7)+
+  geom_line(data = fitted_distrs_df, aes(y = fitted_NB_density, 
+                                x = x_data),
+            color = 'darkgreen', 
+            size = .7,
+            alpha = 0.7) +
+  theme(legend.position = 'bottom',
+    legend.text = element_text(size = 9),
+    panel.background = element_blank()) +
+  labs(title = 'Yellow Cards with NB Fit', 
+       y = 'Density',
+       x = 'YC per game') +
+  scale_color_manual(values = c('blue', 'blue'), 
+                     guide = guide_legend(title = '')) +
+  scale_x_continuous(breaks = 0:12)  ## overrides the legend appearing top or bottom `
+
+## Combine the plots 
+library(gridExtra)
+grid.arrange(plot_1_pois, plot_2_NB, ncol = 2)
+
+```
+
+## Pairwise plots
+
+### Explore some pairwise relationships : Numeric 
+
+```{r code-for-num-plots, warning=FALSE, cache = T}
+##1. ------------- Closer look at SUPREMACY 
+numeric_plot1_supremacy <- data_2_reshaped_imputed_2 %>%
+  ggplot(aes(x = supremacy_implied, y = yellow_cards)) +
+  geom_count(aes(fill = ..n..), color = "#1F78B4",
+             show.legend = F) + ## geom_counts helps with overplotting -- extension of geom_point
+  labs(x = "Goal Supremacy Implied", y = "Yellow Cards") +
+  scale_y_continuous(breaks = seq(0, 9, 1)) +
+  theme_minimal() +
+  geom_smooth(aes(color = "linear"), method = "lm", linetype = "dashed", size = 1) +
+  guides(fill = F)
+
+##2. ------------- Closer look at TOTAL GOALS  
+numeric_plot2_tg <- data_2_reshaped_imputed_2 %>%
+  ggplot(aes(x = total_goals_implied, y = yellow_cards)) +
+  geom_count(aes(fill = ..n..), color = "#1F78B4",
+             show.legend = F) + ## geom_counts helps with overplotting -- extension of geom_point
+  labs(x = "Total Goals Implied", y = "Yellow Cards") +
+  scale_y_continuous(breaks = seq(0, 9, 1)) +
+  theme_minimal() +
+  scale_fill_gradient(low = "lightgray") +  geom_smooth(aes(color = "linear"), method = "lm", linetype = "dashed", size = 1) +
+  guides(fill = FALSE)
+
+
+
+##3. ------------- Closer look at ATTENDANCE  
+numeric_plot3_attendance <- data_2_reshaped %>%
+  filter(match_date <= ymd("2020-05-01") | match_date >= ymd("2021-07-31")) %>% ## REMOVE COVID PERIODS 
+  mutate(home = ifelse(home == 1, 'home', 'away')) %>%
+  ggplot(aes(x = attendance, y = yellow_cards)) +
+  geom_count(aes(fill = ..n..), color = "#1F78B4",
+             show.legend = F) + ## geom_counts helps with overplotting -- extension of geom_point 
+  facet_grid(~home) +
+  labs(x = "Attendance", y = "Yellow Cards") +
+  scale_y_continuous(breaks = seq(0, 9, 1)) +
+  theme_bw() +
+  scale_fill_gradient(low = "lightgray") +  geom_smooth(aes(color = "linear"), method = "lm", linetype = "dashed", size = 1) +
+  guides(fill = FALSE)
+
+
+
+##4. ------------- Closer look at CAPACITY 
+numeric_plot4_capacity <- data_2_reshaped_imputed_2 %>%
+   mutate(home = ifelse(home == 1, 'home', 'away')) %>%
+  ggplot(aes(x = stadium_capacity, y = yellow_cards)) +
+  geom_count(aes(fill = ..n..), color = "#1F78B4",
+             show.legend = F) + ## geom_counts helps with overplotting -- extension of geom_point
+  labs(x = "Capacity", y = "Yellow Cards") +
+  scale_y_continuous(breaks = seq(0, 9, 1)) +
+  theme_bw() +
+  geom_smooth(aes(color = "linear"), method = "lm", linetype = "dashed", size = 1) +
+  guides(fill = F) +
+  facet_grid(~home)
+
+##5. ------------- Closer look at CROWD DENSITY 
+numeric_plot5_crowddens <- data_2_reshaped_imputed_2 %>% 
+  mutate(home = ifelse(home == 1, 'home', 'away')) %>%
+  #filter(stadium_crowd_density > 0) %>%
+  ggplot(aes(x = stadium_crowd_density, y = yellow_cards)) +
+  geom_count(aes(fill = ..n..), color = "#1F78B4",
+             show.legend = F) + ## geom_counts helps with overplotting -- extension of geom_point
+  facet_grid(~home)+
+  labs(x = "Crowd density", y = "Yellow Cards") +
+  scale_y_continuous(breaks = seq(0, 9, 1)) +
+  theme_bw() +
+  geom_smooth(aes(color = "linear"), method = "lm", linetype = "dashed", size = 1) +
+  guides(fill = F) 
+
+##1. ------------- Closer look at DISTANCE TRAVELLED 
+numeric_plot6_staddist <- data_2_reshaped_imputed_2 %>%
+   filter(home == 0)%>%
+  ggplot(aes(x = stadium_dist, y = yellow_cards)) +
+  geom_count(aes(fill = ..n..), color = "#1F78B4",
+             show.legend = F) + ## geom_counts helps with overplotting -- extension of geom_point 
+  labs(x = "Distance traveled", y = "Yellow Cards") +
+  scale_y_continuous(breaks = seq(0, 9, 1)) +
+  geom_smooth(aes(color = "linear"), method = "lm", linetype = "dashed", size = 1) +
+  guides(fill = F)
+
+```
+
+```{r correlation-plot-full, fig.cap="Correlation plot by PerformanceAnalytics", out.width='80%'}
+## Use reshaped data 
+library("PerformanceAnalytics")
+library(ggforce)
+numeric_subset <- data_2_reshaped_imputed_2 %>% select(yellow_cards, supremacy_implied, total_goals_implied, attendance, stadium_capacity, stadium_crowd_density, stadium_dist)
+chart.Correlation(numeric_subset, histogram=TRUE, pch=19, title = "Pair plots")
+```
+
+A brief look at the correlation plot in Fig 11 reveals that while significant, the correlation with yellow cards are mostly small in magnitude. We also see high correlation between similar predictors, such as attendance, stadium capacity, etc, a precursor to section \@ref(multicollin). 
+
+```{r bivariate-numeric-plots-1, fig.cap="Implied data, attendance", out.width='75%'}
+## ARRANGE PLOTS 
+(numeric_plot1_supremacy|numeric_plot2_tg)/(numeric_plot3_attendance)
+```
+
+
+**Implied columns**
+
+There is a slight negative correlation between goal supremacy and yellow cards - a possible interpretation is that the higher the goal supremacy, the 'stronger' the home team is, and hence less intensity that would usually lead to yellow cards. Total goals shares the same direction of correlation, although the interpretation is trickier in this case, and could be confounded through goal supremacy.
+
+**Attendance**
+
+Attendance has a very small correlation with YCs. However, what is interesting is that has a relatively high correlation with total goals implied, both of which could be confounded by match intensity. 
+When we separate out the effects of attendance on YC by home/away, we find that as suggested, there is a general crowd variation effect that influences the home advantage - YCs seem to drop faster for the home side, albeit marginally. 
+
+```{r bivariate-numeric-plots-2, fig.cap="More numeric bivariate plots: crowd density, distance travelled, stadium capacity", out.width='70%'}
+(numeric_plot5_crowddens)/numeric_plot4_capacity
+numeric_plot6_staddist
+```
+
+
+**Stadium Capacity and Crowd Density**
+
+$Crowd \ density = Attendance/ Capacity$, and hence it is reasonable that they are highly collinear, and hence also correlate strongly with total goals implied and. As a standalone predictor, capacity could be an indication of the wealth and budget of a club, is related to the prestige and popularity of the club, which could affect refereeing decision [@boseetal2021]. And interesting note is that the crowd density seems to not affect home advantage (equal slopes), although other factors are not controlled for. 
+
+**Stadium Distance**
+
+The further the away team has traveled, the more likely they are to get YCs, potentially due to travel fatigue [@schwartzandbarsky1977] or due to a greater home advantage effect that the crowd would have on the referee (stronger in-group out-group bias). This has been the largest correlation thus far, and goes against the perception that closer clubs have stronger rivalries and are marred by a higher number of cards. Another interesting finding is that the further a team travels, the fewer away fans tag along with the away team, possibly diminishing the already inferior crowd presence and pressure for the visitors [@humphreys2022].
+
+### Explore some pairwise relationships : Factorial 
+
+
+```{r factorial-plots-set-up, warning=FALSE}
+##1.1 By Home (Home advantage) -------------------------------------------------
+home_adv_corr <- cor(data_2_reshaped$home, data_2_reshaped$yellow_cards)
+
+plot_factorial_1_home <- data_2_reshaped %>%
+  ggplot(aes(x = as.factor(home), y = yellow_cards)) +
+  geom_violin(fill = "lightblue", draw_quantiles = c(0.25, 0.5, 0.75)) +
+  geom_boxplot(width = 0.1, color = "black", fill = "white", outlier.shape = NA) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "red") +
+  stat_summary(fun = mean, geom = "line", aes(group = 1), size = 1, color = "red") +
+  labs(x = "Home", y = "Yellow Cards", title = "Home effect") +
+  #geom_text(aes(label = paste("Corr =", round(home_adv_corr, 2))), x = 1.5, y = max(data_2_reshaped$yellow_cards), hjust = 0.5, vjust = -0.5, color = "black", size = 4) +
+  facet_grid(~country) +
+  theme_bw() + 
+  scale_y_continuous(breaks = seq(0, 8,1)) 
+
+##1.4 By League -------------------------------------------------------------------
+#2.1 Table summary
+by_league_table <- data_2_reshaped %>% group_by(country, competition_level) %>% summarise(mean = mean(yellow_cards),
+                                                  median = median(yellow_cards),
+                                                  se = sd(yellow_cards))
+
+##2.2 Plot
+plot_factorial_4_league <- ggplot(data = data_2_reshaped, aes( 
+                                   x =as.factor(competition_level) , 
+                                   y = yellow_cards)) +
+  geom_violin(fill = "lightblue", draw_quantiles = c(0.25, 0.5, 0.75))+
+  geom_boxplot(width = 0.1, color = "black", fill = "white", outlier.shape = NA) +
+    stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "red") +
+  stat_summary(fun = mean, geom = "line", aes(group = 1), size = 1, color = "red") +
+  labs(x = "Country", y = "Yellow Cards per Game", 
+       title = "Promotion/relegation effect") +
+  facet_grid(~country)+
+  theme_bw() 
+
+##1.2 By Season ----------------------------------------------------------------
+plot_factorial_2_season <- ggplot(data = data_2_reshaped, aes(x = as.factor(season), y = yellow_cards)) +
+  geom_violin(fill = "lightblue", draw_quantiles = c(0.25, 0.5, 0.75)) +
+  geom_boxplot(width = 0.1, color = "black", fill = "white", outlier.shape = NA) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "red") +
+  stat_summary(fun = mean, geom = "line", aes(group = 1), size = 1, color = "red") +
+  theme_minimal() +
+  labs(x = "Season", y = "Yellow Cards per Game", 
+       title = "Distribution of Yellow Cards per Game Across Seasons") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  scale_y_continuous(breaks = seq(0, 8,1))
+
+##1.3 By Country ------------------------------------------------------------------
+# Table summary 
+YC_country_table <- data_2_reshaped %>% group_by(country) %>% summarise(mean = round(mean(yellow_cards),2),
+                                                  median = round(median(yellow_cards),2),
+                                                  se = round(sd(yellow_cards),2))
+# Country Plot 
+plot_factorial_3_country <- ggplot(data_2_reshaped, aes(x = country, y = yellow_cards)) +
+  geom_violin(fill = "skyblue") +
+  geom_boxplot(width=0.1, fill = "white") +
+  theme_bw() +
+  labs(x = "Country", y = "Yellow Cards per Game", 
+       title = "Distribution of Yellow Cards per Game Across Countries") + 
+  scale_y_continuous(breaks = seq(0,9,by = 1))
+
+#1.2.2 Country Plot 
+plot_factorial_32_country <- ggplot(data_2_reshaped, aes(x = yellow_cards, y = ..density..)) +
+  geom_histogram(bins = 30) +
+  labs(x = 'Yellow Card Count') +
+  facet_grid(~country) +
+  theme_classic()
+
+
+
+##1.5 By Referees ---------------------------------------------------------------
+## 1.5.3 Random referees
+set.seed(42)
+random_refs <- data_2_reshaped %>%
+  filter(!is.na(referee)) %>%
+  group_by(country) %>%
+  sample_n(1) %>%
+  pull(referee)
+
+# data_2_reshaped %>% filter(referee %in% random_refs) %>% 
+#   ggplot(aes(x = yellow_cards, fill = country)) +
+#   geom_histogram(aes(y = ..density..),binwidth = 1, color = "black") +
+#   facet_wrap(~referee, ncol = 3, scales = "free") +
+#   labs(x = "Yellow Cards", y = "Count", title = "Random sample of referees by country") +
+#   theme_minimal() +
+#   theme(plot.title = element_text(size = 14, face = "bold"),
+#         axis.title = element_text(size = 12),
+#         axis.text = element_text(size = 10),
+#         strip.text = element_text(size = 10, face = "bold"),
+#         strip.background = element_rect(fill = "lightgray", color = "gray"),
+#         panel.grid = element_blank())
+
+## Ref random subset VIOLIN PLOT
+plot_factorial_5_referee <- data_2_reshaped %>% filter(referee %in% random_refs) %>% 
+  ggplot(aes(x = yellow_cards, y = referee)) +
+  geom_violin(fill = 'lightblue') +
+  geom_boxplot(color = "black", width = 0.2) +
+  labs(x = "Yellow Cards", y = "Referees", title = "Random sample of refs by country") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10),
+        strip.text = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(fill = "lightgray", color = "gray"),
+        panel.grid = element_blank())
+
+##1.5 By Teams ---------------------------------------------------------------
+set.seed(40)
+random_teams <- data_2_reshaped %>%
+  filter(!is.na(referee)) %>%
+  group_by(country) %>%
+  sample_n(1) %>%
+  pull(team)
+
+## Teams random subset HISTOGRAM
+# data_2_reshaped %>% filter(team %in% random_teams) %>% 
+#   ggplot(aes(x = yellow_cards, fill = country)) +
+#   geom_histogram(aes(y = ..density..),binwidth = 1, color = "black") +
+#   facet_wrap(~team, ncol = 3, scales = "free") +
+#   labs(x = "Yellow Cards", y = "Count", title = "Random sample of teams by country") +
+#   theme_minimal() +
+#   theme(plot.title = element_text(size = 14, face = "bold"),
+#         axis.title = element_text(size = 12),
+#         axis.text = element_text(size = 10),
+#         strip.text = element_text(size = 10, face = "bold"),
+#         strip.background = element_rect(fill = "lightgray", color = "gray"),
+#         panel.grid = element_blank())
+
+## Teams random subset VIOLIN PLOT
+plot_factorial_6_teams <- data_2_reshaped %>% filter(team %in% random_teams) %>% 
+  ggplot(aes(x = yellow_cards, y = team)) +
+  geom_violin(fill = 'lightblue') +
+  geom_boxplot(color = "black", width = 0.2) +
+  labs(x = "Yellow Cards", y = "Teams", title = "Random sample of teams by country") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10),
+        strip.text = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(fill = "lightgray", color = "gray"),
+        panel.grid = element_blank())
+
+##1.5 By RUNNING TRACK ---------------------------------------------------------------
+run_track_table <- data_2_reshaped_imputed_2 %>% group_by(home, track = stadium_runningtrack) %>% summarise(mean = round(mean(yellow_cards),3), se = round(sd(yellow_cards),3))
+
+run_track_plot <- data_2_reshaped_imputed_2 %>% 
+    mutate(home = ifelse(home == 1, 'home', 'away')) %>%
+    mutate(stadium_runningtrack = ifelse(stadium_runningtrack == 1, 'track', 'none')) %>%
+mutate(track = as.factor(home))%>%
+  ggplot(aes(y = yellow_cards, x = track,
+             fill = track)) +
+  geom_violin() +
+  geom_boxplot(color = "black", width = 0.2, fill = 'white') +facet_grid(~stadium_runningtrack) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "red") +
+  stat_summary(fun = mean, geom = "line", aes(group = 1), size = 1, color = "red")
+  
+
+
+```
+
+```{r factorial-plots-1, fig.cap="YC across countries", out.width="80%", fig.pos="h"}
+## ARRANGE PLOTS ################################################################
+## Countries
+ggpubr::ggarrange(plot_factorial_3_country, plot_factorial_32_country, ggpubr::ggtexttable(t(YC_country_table)), ncol = 1)
+
+
+```
+
+**Countries** 
+
+Coincidentally, from the violin/boxplot of countries, the distribution of yellow cards seem to be flattening and moving upwards/rightwards as we move from England to Spain, meaning that there is more weight towards higher card counts, although England and Spain both have many upper outliers. The summary table shows the gradual increase in means more clearly - Spain has almost 1 more YC on average than England, and together with Italy, have more mean YC than median (2). The median is the same across all countries, and from the histograms it is clear that the most common number of cards is 2, apart from England (1). 
+
+```{r factorial-plots-2, fig.cap="Home and League effects", out.width="80%", fig.pos="h"}
+## Home, leagues
+plot_factorial_1_home/ plot_factorial_4_league
+
+```
+
+**Home**
+
+From Fig 16, we see home advantage manifesting in terms of fewer YCs for home teams, across all countries. 
+
+**League**
+
+The YC difference between competition levels varies across countries: imperceptible for England and France, but higher for the others, with Germany having the most pronounced increase with relegation. A possible reason for this could be skill or tactical differences between stronger and weaker teams in the respective leagues.
+
+```{r factorial-plots-3, fig.cap="Referee and Team effects", out.width="70%"}
+
+## Random sample of teams, referees
+plot_factorial_5_referee/plot_factorial_6_teams
+
+
+```
+
+
+*Referees*
+
+Referees have a huge influence on number of cards awarded, and it is expected that the distribution varies across individuals. Due to the large number of unique referees, we pick a random sample (1 from each country) in Fig 17.  
+
+*Teams*
+
+We take the same approach for teams, and once again observe unique distributions. 
+
+In both variables, YCs are likely to be correlated within levels, and we will address this within-cluster dependence later. 
+
+```{r factorial-plots-4, fig.cap="Separation by running track", out.width="70%"}
+## Running track
+ggpubr::ggarrange(run_track_plot, ggpubr::ggtexttable(run_track_table), ncol = 1, heights = c(2,1))
+```
+
+
+*Track*
+
+The YC distributions seem to become less right skewed with a track, although the sample imbalance could be a reason. It is hard to say if home advantage is really reduced in the presence of a running track, as the mean for both sides increase as a result.
+
+
+
+## Explore time factor: Any seasonality within seasons?
+
+```{r yellow-card-within-season-seasonality, fig.cap="YC Seasonality", out.width="70%", results='hide'}
+## First, need to create a match_week column 
+library(lubridate)
+data_2_reshaped_imputed_3 <- data_2_reshaped_imputed_2 %>%
+  group_by(country, competition_level, season, team) %>%
+  arrange(match_date) %>%
+  mutate(matchweek = row_number()) %>% 
+  ungroup()
+
+## Check 
+data_2_reshaped_imputed_3 %>% filter(team == "Liverpool", season == 2019) %>% select(team, opponent, match_date, matchweek)
+
+## Calculate the average number of yellow cards per matchweek within a season (for each country) 
+##(i.e. every country, every season, we find the average cards for each week)
+average_yellow_cards_by_countryseasonweek <- data_2_reshaped_imputed_3 %>%
+  group_by(country, season, matchweek) %>%
+  summarise(avg_yellow_cards = mean(yellow_cards))
+
+
+## Evolution of yellow cards over each season, for each season
+average_yellow_cards_by_countryseasonweek %>% 
+#  filter(season == 2019) %>%
+ggplot(aes(x = matchweek, y = avg_yellow_cards, fill = as.factor(country))) +
+  geom_point(size = 0.5) +
+  geom_smooth(alpha = 0.5) +
+  facet_wrap(~ season, scales = "free_x") +
+  labs(x = "Matchweek", y = "Average Yellow Cards", fill = "Season") +
+  theme_minimal()
+```
+
+
+We see that there is a general seasonality where the mean number of YCs increase first, then decrease towards the end of the season, although the curvature varies by country. The curves in the plots were fitted with local regression methods and suggest polynomial effects, clustered based on countries.
+
+# Feature engineering 
+
+We "engineer" some new columns that may help in our predictions. 
+
+## Adding lag variables - yellow cards 
+
+A common method used to model the number of goals in football is to use a proxy for the team's current performance, via a weighted average of the previous games' number of goals scored. In the same vein, we will test if adding the lagged count of YCs helps to predict the team's propensity for YCs in a present game. We introduce this as `yellow_card_lag1`.
+
+```{r adding-lagged-yellow-cards, cache = T, fig.cap="Adding a lagged YC variable", out.width="60%"}
+## Focus on each team - arrange all their games by chronological order, then add a new column of the lagged yellow card variable
+data_2_reshaped_imputed_3 <- data_2_reshaped_imputed_3 %>% arrange(team, match_date) %>% mutate(yellow_card_lag1 = lag(yellow_cards)) ## Add lag 1 variable
+
+## Replace the new NAs in the lag column with 0 
+data_2_reshaped_imputed_3 <- data_2_reshaped_imputed_3 %>% mutate(yellow_card_lag1 = ifelse(is.na(yellow_card_lag1), 0, yellow_card_lag1))
+
+## PLOT 1: Check for correlation via plot 
+lag_jitter_plot1<- data_2_reshaped_imputed_3 %>%
+  ggplot(aes(x = yellow_card_lag1, y = yellow_cards)) +
+  geom_jitter() +
+  geom_smooth(method = 'loess') +
+  theme(panel.background = element_rect(fill = "white")) +
+  labs(x = "", y = "Current Yellow Card Count", title = "Yellow Card Counts Heatmap") +
+  scale_x_continuous(breaks = 0:9) +
+  scale_y_continuous(breaks = 0:9)
+
+## Check for correlation via contingency table 
+table_counts <- table(data_2_reshaped_imputed_3$yellow_cards, data_2_reshaped_imputed_3$yellow_card_lag1)
+# Convert the table to a data frame
+df_counts <- as.data.frame(table_counts)
+
+## PLOT 2: Plot the heatmap
+lag_heatmap_plot2 <- ggplot(df_counts, aes(x = Var1, y = Var2)) +
+  geom_tile(aes(fill = Freq), color = "white") +
+  scale_fill_gradient(low = "white", high = "blue") +
+  labs(x = "Lagged Yellow Card Count", y = "", title = "")
+
+## Arrange 
+grid.arrange(lag_jitter_plot1,lag_heatmap_plot2, ncol = 2)
+
+
+```
+
+The heatmap gives us a better view since the variables are discrete. It looks safe to assume that there is a linear relationship between the lag and the current yellow card.
+
+## Adding more weight to recent observations for model training 
+
+```{r adding-caseweights, fig.show='hide'}
+## Use last date of dataset as reference point
+last_date <- max(data_2_reshaped_imputed_2$match_date)
+
+## Introduce time_elapsed variable as inverse of weight 
+data_2_reshaped_imputed_3$days_elapsed <- last_date-  data_2_reshaped_imputed_3$match_date
+days = range(data_2_reshaped_imputed_3$days_elapsed)
+tibble_days = tibble(days = days[1]:days[2])
+## Want to make a weight such as weight = 1 for most recent i.e. time_elapsed = 0, weight = 0 for time_elapsed = high value 
+map_dfr(
+  c(0.99, 0.999, 0.9999),
+  ~ tibble_days %>% mutate(base = factor(.x), value = .x ^ days)
+) %>%
+  ggplot(aes(days, value, group = base, color = base)) +
+  geom_line()
+
+## As per https://www.tidymodels.org/learn/work/case-weights/, we also use 0.999
+data_2_reshaped_imputed_3$caseweights_by_recency <- 0.999^(as.numeric(data_2_reshaped_imputed_3$days_elapsed))
+```
+
+For the purposes of forward predictions (predicting games in the future), we add a new column containing the `days_elapsed` which captures the difference in days between a the specific match (observation) and the most recent date found in the dataset. To give greater weights to observations that are more recent, we use `caseweights_by_recency` which is a strictly decreasing function of number of days, with the formulation taken from [@Tidymodels].
+
+## Add referee experience and covid_impacted period
+
+```{r feature-eng-add-cols, out.width="60%"}
+## Add covid-impacted column (binary - 1 if attendance affected by covid)
+data_2_reshaped_imputed_3 <- data_2_reshaped_imputed_3 %>% mutate(covid_impacted = if_else(
+    (match_date >= ymd("2020-05-01") & match_date <= ymd("2021-07-31")), 1, 0
+))
+
+## Add referee experience level 
+data_2_reshaped_imputed_3 <- data_2_reshaped_imputed_3 %>%
+  arrange(match_date) %>% ## need chronological order 
+  group_by(referee) %>% ## group by referee
+  mutate(referee_experience = cumsum(!is.na(referee))) %>% ## add cumulative experience
+  ungroup()
+
+## Check - covid impacted 
+# table(data_2_reshaped_imputed_3$covid_impacted)
+## Check - referee experience 
+# (data_2_reshaped_imputed_3) %>% ggplot(aes(x = referee_experience)) + 
+#   geom_histogram(color = 'black', fill = 'white', bins = 30) +
+#   theme_bw()
+```
+
+For engineered features that could be useful, we add an indicator variable for empty stadiums due to covid restrictions, by subsetting for dates where the measures were enacted. To get a proxy for referee experience, we generate a new column that measures the number of games a particular referee has already officiated prior to the observation. ^[There are obvious limitations - the `referee_experience` is truncated at the beginning of the dataset, and all referees will start at 0 whether they have had a lot or no experience prior.] 
+
+### Does covid affect home-advantage for YCs? 
+
+```{r code-covid-impacted-home-away, warning=F, message=FALSE}
+library(ggpubr)
+covid_home_adv_table <- data_2_reshaped_imputed_3 %>% group_by(covid_impacted, home) %>% summarise(mean = round(mean(yellow_cards),2), 
+                                                                                            median = median(yellow_cards)) %>% rename(covid = covid_impacted)
+
+cov_table_theme <- ttheme(base_size = 7, 
+                          padding = unit(c(2,2),'mm'))
+ggtext_covid <- ggtexttable(covid_home_adv_table, 
+                            theme = cov_table_theme)
+
+# ggplot(data_2_reshaped_imputed_3, aes(fill = as.factor(covid_impacted), x = yellow_cards)) + geom_histogram(aes(y = ..density..),position = 'dodge') + 
+#   facet_grid(~home)
+
+covid_home_adv_plot <- data_2_reshaped_imputed_3 %>% mutate(covid_impacted = ifelse(covid_impacted == 0, 'No Covid', 'Covid')) %>%  
+  ggplot(aes(x = as.factor(home), y = yellow_cards, fill = as.factor(home))) + 
+  geom_violin() + 
+  facet_grid(~covid_impacted) + 
+  scale_y_continuous(breaks = seq(0,9,1))+
+  labs(y = "Yellow Cards", x = 'Home',
+       fill = 'Home?',
+       title = 'Does covid-attendance affect home advantage') +
+    stat_summary(fun = mean, geom = "point", shape = 18, size = 3, color = "red") +
+  stat_summary(fun = mean, geom = "line", aes(group = 1), size = 1, color = "red") +
+  theme_minimal() 
+
+
+
+
+```
+
+```{r covid-impacted-home-away, fig.cap= "Home advantage in ghost games (covid)",out.width="80%"}
+## Plot for "does covid affect home adv"
+ggpubr::ggarrange(covid_home_adv_plot,ggtext_covid , ncol = 2, 
+                  widths = c(2,1))
+```
+
+
+As with the literature, referees are indeed more likely to treat both sides more equally in covid-impacted matches, as seen from the fig \@ref(fig:covid-impacted-home-away) where the distribution becomes even between home and away. 
+
+
+### Does referee experience affect home-advantage for YCs? 
+
+```{r referee-experience-vs-YC, out.width="60%"}
+data_2_reshaped_imputed_3 %>%
+  mutate(home = ifelse(home == 1, 'Home', 'Away')) %>% ggplot(aes(x = referee_experience, y = yellow_cards)) + geom_count(aes(fill = ..n..), color = "#1F78B4") + 
+  geom_smooth(method = 'lm', se = T, color = 'red', linetype = 'dashed')+
+  labs(x = 'Ref Experience', y = "Yellow Cards", title = "Does experience affect home-advantage") + facet_wrap(~home)
+
+```
+
+Referees with more experience seem to award fewer YCs for both home and away. 
+
+# High Cardinality data 
+
+```{r high-cardinality-kable}
+cardinal_table <- data_2_reshaped_imputed_2 %>% count("Number of referees" = n_distinct(referee),
+                          "Number of teams" = n_distinct(team),
+                          "Number of opponents" = n_distinct(opponent))
+
+## DISPLAY KABLE FOR CARIDNALITY =====================
+kable(cardinal_table, caption = "High cardinality dataset") %>% kable_styling(latex_options = "HOLD_position") %>% kable_classic_2()
+```
+
+
+```{r PLOT-high-cardinality-variables, fig.cap = "High cardinality categorical variables", out.width="70%"}
+
+set.seed(11)
+sampled_teams <- data_2_reshaped_imputed_2 %>% 
+  distinct(team) %>%
+  sample_n(20) %>% 
+  pull(team)
+
+cardinal_plot1 <- data_2_reshaped_imputed_2 %>% 
+  filter(team %in% sampled_teams) %>% 
+  ggplot(aes(x = team, y = yellow_cards)) + 
+  geom_violin(fill = '#1F78B4') +
+  labs(title = "Variation between teams", y = "Yellow Cards",
+       x = "Teams")+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+## Visualise cardinality: REFEREES 
+sampled_refs <- data_2_reshaped_imputed_2 %>% 
+  distinct(referee) %>%
+  sample_n(20) %>% 
+  pull(referee)
+
+cardinal_plot2 <- data_2_reshaped_imputed_2 %>% 
+  filter(referee %in% sampled_refs) %>% 
+  ggplot(aes(x = referee, y = yellow_cards)) + 
+  geom_violin(fill = '#1F78B4') +
+  labs(title = "Variation between referee", y = "Yellow Cards",
+       x = "Referees")+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+## DISPLAY PLOTS FOR HIGH CARDINALITY FOR TEAMS AND REFEREE ========
+cardinal_plot1|cardinal_plot2
+
+```
+
+From Table \@ref(tab:high-cardinality-kable) and Fig \@ref(fig:PLOT-high-cardinality-variables), we struggle with high cardinality for `referee`, `team` and `opponent`. Treating it as a factor results in one-hot encoding, but this would be unfeasible as the feature space becomes too overwhelmed, and the large number of levels violate the orthogonality assumption and suffers the curse of dimensionality as a result, giving further computational difficulties.  As we have seen, high-cardinality usually comes with uneven exposure (Fig 2, 3), where levels with fewer observations are poorly estimated [@avanzi2023machine]. Furthermore, we may run into the issue of overfitting, giving the model a high variance, and many models will have an issue finding reasonable regularisation (Sigrist 2023).
+
+Adding in the issues of repeated measurements within levels and uneven sampling, the suggested methods include the following 
+
+* Adding mixed effects to linear models (good for cardinality where levels are have uneven sample sizes)
+
+* Tree boosting (good for cardinality, high dimensions)
+
+* Combining boosting and random effects via GPBoost (Sigrist, 2022, 2023)
+
+To account for within-level correlation, alongside mixed effects we test Generalised Estimating Equations (GEE), but show its limitations for our use-case. 
+
+# Approach for modelling 
+
+```{r modelling-approach-table, fig.pos='H'}
+data <- data.frame(
+  Type = c("Linear", "GLM", ".",".", "Tree-based", ".", "."),
+  Model = c("Linear Model", "Generalized Linear Model (GLM)", 
+            "Standard GLM", "Generalized Estimating Equations (GEE)", 
+            "Random Forest", "XGBoost", "GPBoost"),
+  Description = c("Standard Multiple Linear Model",  
+                  "Poisson regression for count data", "Referee, team random effects", 
+                  "Correlation structure for referee, teams", "Ensemble of decision trees", 
+                  "Gradient boosting algorithm", "Tree boosted models with mixed effects"),
+  Focus = c("Interpretation", rep("-",3), "Prediction", "-", "-"),
+  Dataset = c("Country by Country",rep(".",3),"Full data", ".", ".")
+)
+
+kable(data, caption = "Models and their focus") %>% kable_styling(latex_options = c('scale_down', 'HOLD_position')) %>% kable_classic_2()
+```
+
+
+```{r modelling-methodology, fig.cap="Methodology", out.width='70%'}
+knitr::include_graphics("modelling_approach.jpg")
+```
+
+Linear models allow us to get a sense of how each predictor affects the outcome directly. For simplicity, we run the models country by country but take a deeper look at the coefficients for the England dataset. On many metrics the English Premier League is the most highly-anticipated in the world, leading by broadcasting income per club of 143.2 million pounds, substantially higher than the next best league which is the La Liga from Spain (66.6 million pounds), with the other top-flight leagues trailing behind (UEFA Benchmarking Report 2019). 
+
+Nevertheless, we do not lose out on generality as at the end, we compare all models on the full datasets with all countries, and the associated linear model regression outputs can be found in the appendix. 
+
+^[Readers who are only interested in models trained with the entire dataset can skip to the last section]
+
+# Model 1: Linear Models 
+
+## Motivation for Linear Models
+
+Following the exploratory analysis on the pairwise plots (YC against predictors), we detect linear relationships that were weak in magnitude. The obvious choice for Poisson regression unfortunately assumes a non-linear, exponential relationship between the outcome and the predictors (more on this later), which may be a tough ask. Linear models are simple and highly interpretable (estimates can be interpreted directly in the same scale as the outcome) and offers a good starting point in our analysis. 
+
+
+### Assumptions: 
+
+* Linear relationship between predictors and outcome
+* Normal distribution of errors
+* Independence between observations 
+* No multicollinearity
+* Homoskedasticity 
+
+## Theory for Linear Models 
+
+We regress
+
+\begin{align*}
+YC \sim \text{Season ,Competition Level, Referee, Team, Opponent, Implied Supremacy} \\  
+\text{Implied Total Goals, YC Lag 1, Matchweek}
+\end{align*}
+
+To model the equation (not strictly)^[The linear equation is meant to give the reader a general sense of what we are estimating, but as we will see we may include interactions that are not listed in the equation]
+
+\begin{align*}
+YC = \beta_0 + \beta_1* \text{Season} + \beta_2 * \text{Competition Level} + \beta_3 * \mathbf{\text{Referee}} + \beta_4 * \mathbf{\text{Team}} + \beta_5 * \mathbf{\text{Opponent}} \\  
++ \beta_6 * \text{Implied Sup} + \beta_7 * \text{Implied Total Goals} \\ 
++ \beta_8 * \text{Matchweek} + \beta_9 * \text{YC Lag 1} + \epsilon \\ 
+\text{where} \ \epsilon \sim N(0, \sigma^2)
+\end{align*}
+
+excluding the possible interactions between predictors, and the newer variables that were supplied later on by Smartodds, such as attendance, capacity, etc. 
+
+Since `referee`, `team` and `opponent` are one hot encoded vectors, $\beta_3, \beta_4, \beta_5$ are actually vectors of coefficients themselves, where ${\beta_{\mathbf{j}}} = [\beta_{j_1}, \beta_{j_2}, \ldots, \beta_{j_{n_j-1}}]$ are coefficients for categorical variable $j$ which has $n_j$ levels. In this case, each level for the `referee` represents a particular referee, and each level for `team` or `opponent` represents a team from the league. 
+
+## Data Preprocessing
+
+We standardise `tg_implied` and `sup_implied`. To reduce the scale and allow for easier interpretation for attendance and capacity, we now define it in terms of 10 000 people (i.e. divide by 10 000).
+
+R uses reference level coding which means that a certain level from every categorical variable is used as a point of reference and is captured by the intercept, allowing all other level coefficients to be interpreted with respect to the reference level. We change the relevel the `team` variable to have *Arsenal* as the reference, and *Aston Villa* for that of the `opponent`.
+
+```{r data-preprocessing-before-modelling, warning=FALSE, message=FALSE}
+## ----------- STANDARDISE NUMERIC columns: implied tg, implied sup, season----
+library(datawizard)
+data_2_reshaped_imputed_4 <- data_2_reshaped_imputed_3 %>% mutate(
+  total_goals_implied_scaled = standardise(total_goals_implied), ##1: standardise total goals
+  supremacy_implied_scaled = standardise(supremacy_implied), 
+  attendance = attendance/10000, ## ATTENDANCE --  PER 10 000
+  stadium_capacity = stadium_capacity/10000) ## STADIUM CAPACITY -- PER 10 000
+#  attendance = scale(attendance),
+#  referee_experience = scale(referee_experience))#, ##2: standardise goal supremacy
+
+## ----------- Remove unwanted columns from data_2_reshaped ------------
+data_2_reshaped_imputed_5 <- data_2_reshaped_imputed_4 %>% select(-total_bookings, -red_cards, -opposition_yc, -supremacy_implied, -total_goals_implied, -match_date)
+
+  
+## ------------------- Use England only data -------------------
+Eng_only <- data_2_reshaped_imputed_5 %>% filter(country == 'England') %>% select(-country, -stadium_runningtrack)
+
+## England only: Relevel the opponent variable such that the base level for team and opponent will not both be Arsenal
+Eng_only <- droplevels(Eng_only)
+Eng_only$opponent <- relevel(Eng_only$opponent, ref = 'Aston Villa')
+Eng_only$team <- factor(Eng_only$team, levels = unique(Eng_only$team))
+Eng_only$team <- relevel(Eng_only$team, ref = 'Arsenal')
+# Eng_only$referee <- factor(Eng_only$referee, levels = unique(Eng_only$referee))
+# Eng_only$referee <- relevel(Eng_only$referee, ref = 'Andrew Madley')
+
+## ------------------- Train set and test set? ENGLAND DATA -- USE SAMPLE FROM LATEST SEASON AS TEST
+
+
+
+## Get train and test for England 
+Eng_train <- Eng_only[-test_indices_generator(Eng_only), ]
+Eng_test <- Eng_only[test_indices_generator(Eng_only),]
+
+## Remove old data
+rm(data_2_reshaped_imputed_1, data_2_reshaped_imputed_2, data_2_reshaped_imputed_3, data_2_reshaped_imputed_4)
+```
+
+
+**Train test split**
+
+Since the logical use of a football model would be one for predicting the future instead of the pass, we select a random sample for the test set from the most recent season (2022) in the dataset. The models are built with special `weights` by recency which can be conveniently specified in the built in `lm` function in R, as well as most other model fitting algorithms.
+
+## Running the Linear models 
+
+### England results
+
+The simplicity and efficiency of linear models allow for us to do simple hypothesis testings and exploratory analysis for the determinants of YCs. Of interest would be whether there are still interaction effects when all other variables are held constant, i.e. via the 'ceteris paribus' assumption which basic plots would not have informed us on. 
+
+The base linear model `model_1_linear` includes no interaction and treats `season` as numeric. In `model_1.2_linear` we allowed for `seasons` to be factorial, which agreed with the data visualization that every season was unique rather than following some general time trend, `season` * `matchweek` interactions. For `model_1.3_linear` we added quadratic matchweek effects. We then added interactions between `home` and `team` since clubs may have different home-advantages for `model_1.4_linear`, which was quickly proven to be overfitted and hence dropped the interactions. Finally, we added `home` related interactions with `attendance`, `covid`, `capacity` etc for `model_1.5_linear`. 
+
+^[Recall that since England only has stadiums without running track, we won't include it as a predictor.] 
+
+```{r linear-regression-England-only-data, results = F}
+## Fitting of models done on separate file : "LINEAR_MODELS_ENG_AND_OTHER_COUNTRIES.R"
+
+load("../testing/Eng_only_linear_models")
+
+```
+
+
+The F tests overwhelming stood in favour of the fullest model (`model_1.5_home_intns`) - the p-values from comparing 1.5 to the nested models are all essentially 0. Using the `compare_performance` function from the package `performance`, we get a rank with `model_1.5_linear` being the best in terms of a combination of model metrics, such as R^2, AIC, (although BIC naturally favoured the base model with no interactions at all). 
+
+```{r compare-linear-models}
+## Done on "LINEAR_MODELS_ENG_AND_OTHER_COUNTRIES.R"
+load("../testing/mse_data")
+## KABLE 
+kable(mse_data, align = 'c', caption = "Comparison of MSE (Linear Models)") %>%
+  kable_styling(latex_options = 'HOLD_position') |> 
+  kable_classic_2()
+
+```
+
+On both training fit and test performance, model 1.5 had the best overall results, allowing an increase in model fit without a substantial increase in test MSE (although differences in metrics across models are small).
+
+#### Interpreting linear model (England)
+
+
+```{r linear-model-interpretations}
+## Take a random sample of teams, referees, opponents for us to see coefficients for
+lm_1.5_summary <- summary(model_1.5_linear_home_itns)
+lm_1.5.coeffs <- model_1.5_linear_home_itns %>% geepack::tidy() %>%mutate(across(where(is.numeric), round, digits = 3))
+liverpool_rows <- lm_1.5.coeffs %>% filter(str_detect(term, 'Liverpool'))
+
+## TEAMS: 
+set.seed(11)
+teams_coeff <- rbind(lm_1.5.coeffs %>% filter(str_detect(term, "team")) %>% sample_n(size = 9), liverpool_rows[1,]) 
+
+## REFEREES
+set.seed(11)
+ref_coeff <- lm_1.5.coeffs %>% filter(str_detect(term, "referee")) %>% sample_n(size = 10)
+
+## OPPONENTS
+set.seed(11)
+opp_coeff <- rbind(lm_1.5.coeffs %>% filter(str_detect(term, "opponent")) %>% sample_n(size = 9), liverpool_rows[2,]) 
+
+## ELSE 
+else_coeff<- lm_1.5.coeffs %>% filter(!str_detect(term, "opponent") & !str_detect(term, "referee") &!str_detect(term, "team"))
+
+## COMBINED TABLE 
+separator <- c(rep("...", 5))
+final_coeffs_table <- rbind(teams_coeff, separator, ref_coeff, separator, opp_coeff, else_coeff)
+
+## SHOW TABLE 
+kable(final_coeffs_table, 
+    caption = "Linear model output table",
+  #  format = 'latex',
+    digits = 3,
+    longtable = T)
+
+```
+
+The full summary table contains too many rows, and hence we have taken a snippet for display. ^[The full table can be found in the appendix.] 
+
+The R^2 and adjusted R^2 are `r round(lm_1.5_summary$r.squared,3)` and `r round(lm_1.5_summary$adj.r.squared,3)` respectively, which is clearly low, potentially signifying the amount of noise and unobservables captured in a football game that determines the number of cards. As expected, there is a strong overall significance of the model, with an F statistic, 'num_df' and 'den_df' of `r round(lm_1.5_summary$fstatistic)`, which gives a p value of essentially 0. 
+
+**Team, opponent, referee effects**
+
+For the categorical variables, coefficients are interpreted with respect to the base category. The teams coefficients are in relation to Arsenal (all else constant) - for example, Liverpool has a statistically significant **0.40** (p < 0.001) less YCs than Arsenal, all else equal. Likewise, the opponent coefficients are in reference to Aston Villa, and the referee coefficients to Andre Marriner. Interestingly, few of the `team` effects are statistically significant^[See full table], but many of `opponent` effects are - suggesting that a specific team can expect to get a varying number of YCs when playing against teams. E.g. A team is likely to get **-0.63** (p < 0.001) YCs playing against Liverpool than playing against Aston Villa. The team you are up against strongly determines your YC.
+
+Fewer levels of referees achieved low p values^[See full table], suggesting that, holding all else constant, the perception that referees differ in their disciplinary style and card-awarding behavior may be overblown, although it could be an issue of power of the test. 
+
+**Others**
+
+**Home, competition level**
+
+The standalone home effect is negative at **-0.14**, as expected, but did not achieve significance (p = 0.33). This is possibly due to the confounding effects through attendance, crowd density etc, that have been included in the regression. In terms of league, relegating to the championship sees an increase in YC of **0.20** (p = 0.005). 
+
+**Implied**
+
+An increase of 1 standard error of implied supremacy corresponds to a decrease of **0.11** (p < 0.001) YC, while the same for implied total goals leads to a drop of **0.04** (p = 0.002), both of which are highly statistically significant. As mentioned, implied supremacy could be a proxy for the level of competition or intensity in a football game - when the match is uneven (one side is much stronger and hence higher supremacy), there may be less intensity on the pitch and a lower need for YCs, although more research is needed to prove this correlation or causality. 
+
+**Matchweek**
+
+The effects related to matchweek turn out to be either weak or statistically insignificant or both, including interactions with season. Lagged YCs failed to achieve significance as a predictor. (This could be unique to England, as seen in the seasonality plot)
+
+**Covid, attendance, and others**
+
+The `covid_impacted` period saw a reduction of **.14** YC for the away side, but an increase for home side (about 0.177 YC), reaffirming the reversal in home advantage in empty stadiums, albeit statistically insignificant.
+
+For general variation in attendance, a 10k increase in spectators results in an decrease of **0.079** YC (p < 0.01) for the away team, and is nullified for the home team (-0.079+0.098 = 0.19 YC), an unexpected result. In this case, perhaps more granular split of the home and away attendance would be more useful, although in most cases the home fans take up a much larger proportion of the attendance.  
+
+Stadium distance also ultimately proved to have no effect on YC. Seating capacity failed to gain any (statistically) significant effect, for both home and away. 
+
+Finally, in agreement with contextual knowledge, crowd density is instrumental for home advantage, increasing the YC for away team by 0.5 on average, and which drops by 0.426 to `r 0.5-.426` for the home club with statistical significance. 
+
+**Top (and bottom) referees, teams, opponents**
+
+```{r top-offenders}
+top_YC_teams <- data.frame(model_1.5_linear_home_itns$coefficients) %>% rownames_to_column(var = 'coeff') %>%
+  filter(str_detect(coeff,"team")) %>% slice_max(model_1.5_linear_home_itns.coefficients,n =3)
+
+top_YC_refs <- data.frame(model_1.5_linear_home_itns$coefficients) %>% rownames_to_column(var = 'coeff') %>%
+  filter(str_detect(coeff,"referee")) %>% slice_max(model_1.5_linear_home_itns.coefficients,n =3)
+
+top_YC_opponents <- data.frame(model_1.5_linear_home_itns$coefficients) %>% rownames_to_column(var = 'coeff') %>%
+  filter(str_detect(coeff,"opponent")) %>% slice_max(model_1.5_linear_home_itns.coefficients,n =3)
+
+combined_top_YCs <- rbind(top_YC_teams, top_YC_opponents, top_YC_refs) %>% rename(Coefficients = `model_1.5_linear_home_itns.coefficients`, Names = coeff)
+combined_top_YCs <- separate(combined_top_YCs, col = Names, into = c("Group", "Name"), sep = "(?=[A-Z])", extra = "merge") %>% mutate(Coefficients = round(Coefficients, 3))
+
+## Kable for TOP OFFENDERS 
+kable(combined_top_YCs, caption = "Teams/Opps/Refs with most YCs", align = 'c') %>% 
+  row_spec(row = c(1,2,3,7,8,9), background = '#D3D3D3') %>%
+  kable_styling(latex_options = 'HOLD_position') %>%
+  kable_classic_2()
+
+```
+
+Ignoring p-values and focusing on conditional means, we look for teams, opponents and referees that are involved with the most number of YCs. Manchester United takes the cake when it comes to getting cautioned, with 0.25 cards more than the base team (Arsenal), followed by two Championship teams Charlton and Milton Keynes. For opponents that one might draw the most YCs against, Conventry is top, and Milton Keynes appears again. The 3rd place for Opponents would be Aston Villa, being the base level (Blackpool as 4th). Finally, teams would love to avoid Antony Coggins and Phil Dowd, who are likely to punish bad behavior on the pitch with a yellow (base refereee = Andre Marriner), and the unknown referees in the Championship tend to be stricter as well. On the other hand, the lowest awarding/ receiving referees/teams are as follows (Table 5): 
+
+```{r bottom-offenders}
+bottom_YC_teams <- data.frame(model_1.5_linear_home_itns$coefficients) %>% rownames_to_column(var = 'coeff') %>%
+  filter(str_detect(coeff,"team")) %>% slice_min(model_1.5_linear_home_itns.coefficients,n =3)
+
+bottom_YC_refs <- data.frame(model_1.5_linear_home_itns$coefficients) %>% rownames_to_column(var = 'coeff') %>%
+  filter(str_detect(coeff,"referee")) %>% slice_min(model_1.5_linear_home_itns.coefficients,n =3)
+
+bottom_YC_opponents <- data.frame(model_1.5_linear_home_itns$coefficients) %>% rownames_to_column(var = 'coeff') %>%
+  filter(str_detect(coeff,"opponent")) %>% slice_min(model_1.5_linear_home_itns.coefficients,n =3)
+
+combined_bottom_YCs <- rbind(bottom_YC_teams, bottom_YC_opponents, bottom_YC_refs) %>% rename(Coefficients = `model_1.5_linear_home_itns.coefficients`, Names = coeff)
+combined_bottom_YCs <- separate(combined_bottom_YCs, col = Names, into = c("Group", "Name"), sep = "(?=[A-Z])", extra = "merge") %>% mutate(Coefficients = round(Coefficients, 3))
+
+## Kable for TOP OFFENDERS 
+kable(combined_bottom_YCs, caption = "Teams/Opps/Refs with least YCs", align = 'c') %>% 
+  row_spec(row = c(1,2,3,7,8,9), background = '#D3D3D3') %>%
+  kable_styling(latex_options = 'HOLD_position') %>%
+  kable_classic_2()
+
+```
+
+
+
+#### Evaluation of linear model 
+
+```{r linear-model-diagnostics, fig.caption = "Model Diagnostics", fig.align='center', out.width='80%'}
+## Diagnostic plots for linear regression
+par(mfrow = c(2,2))
+plot(model_1.5_linear_home_itns)
+
+```
+
+```{r linear-model-diagnostics-2}
+## Outliers/ High leverage points
+kable(Eng_only[c(13065, 13570, 10282),(1:8)],
+      caption = "Snippet of Outliers/High leverage points") %>% 
+  kable_styling(latex_options = ("HOLD_position")) ## table too wide
+```
+
+
+We do not expect to see pleasant diagnosis results from fitting a linear model to a count variable, from the diagnostic plots.
+
+The Residuals-Fitted plot shows systematic downward sloping parallel lines, likely due to the discrete nature of YC. At low fitted values, the model overestimates the true YC (more positive residuals), but as the fitted values the residuals get steadily more negative.
+
+The normal qq-plots indicate departures from normality at both extremes. From both Residuals-Plot and the Scale-Location we see an increasing variance and a few cases of high leverage points whose rows are shown. These rows could potentially be due to a rare combination of predictors or contain abnormally high number of cards (Table \@ref(tab:linear-model-diagnostics-2)). The arc shapes in the Scale-Location point to the discreteness of the outcome, where the model occasionally acheives perfect predictions for YC = 1, 2 or 3. 
+
+Multicollinearity is likely and will be discussed in the last section with the full models. 
+
+**Other limitations**
+
+It is possible that a lot more complex interactions exist in determining the number of YCs than we were able to specific in our linear model without ending up with too many parameters, such as team*opponent interactions for rivalries. According to talksport.com (2019), the Tottenham-Arsenal derby has seen 227 YCs since the beginnings of the league, trailing behind Chelsea - Manchester United with 251, and just in front of Arsenal - Manchester united (225). It is clear that some clubs have animosities that lead to more above average number of cards. `stadium_dist` would be a decent proxy but limited to geographical rivalries. 
+
+Furthermore, the linear model lacks a nesting/hierarchical structure, where some teams (or referees) only appear in one league and not the other. 
+
+#### Repeat Linear Model for other countries 
+
+We now repeat for the other countries, for completeness, and focus a little less on interpretation and more on model performance and generalisability. Predictions are very sensitive to rank deficiency for the other countries (and the models further down the line), so we stick with choosing statistically significant predictors (a method with limitations but for simplicity and consistency for the rest of the analysis).
+
+* Basic linear model 
+* Add polynomial effects for matchweek
+* Add interactions
+
+
+```{r linear-models-for-all-countries, warning=FALSE}
+## Populating comparison_table_linear_only done in "LINEAR_MODELS_ENG_AND_OTHER_COUNTRIES.R"
+
+load("../testing/comparison_table_linear_only")
+
+## Make kable for comparison data
+kable(comparison_table_linear_only %>% select(Country, Model, AIC, RMSE, test_RMSE), caption = "Linear Models for all Countries", 
+      align = 'c') %>% 
+  kable_styling(latex_options = 'HOLD_position') %>% 
+  add_header_above(c("Linear Models" = 2,"Internal Metrics" = 2, "External Metric" = 1)) %>%
+  row_spec(row = c(1,2,3,7,8,9,13,14,15), background = "#D3D3D3") %>%
+  kable_classic_2()
+
+
+
+```
+
+
+
+# Model 2: Poisson Regression (GLM)
+
+## Standard Poisson GLM 
+
+Contextual knowledge of the outcome of interest and the data visualization have pointed us towards the use of Poisson regression models. Generalised Linear Models (GLMs) extend the idea of modelling the mean of a normal distribution in the case of ordinary linear models to the mean of any exponential family distribution, allowing different types of outcomes to be modeled, such as binary or count data.
+
+The Poisson GLM uses the log-link function to connect the conditional mean of the outcome to the linear estimator. This is shown as below: 
+
+\begin{align*}
+YC \sim Poisson(\lambda) ,\ \ {Pr(YC = yc)} = \frac{\lambda^{yc} * e^{- \lambda}}{yc!} \\  \text{where} \ \lambda = g^{-1}(\mathbf{B^TX})  \\
+\text{where} \ \ g = \text{link function} \\ 
+\text{and} \ \ g(*) = {log(*)} \\ \\ 
+\text{hence} \ \ \lambda = exp(\mathbf{B^TX}) = E(YC|\mathbf{X}) = Var(YC|\mathbf{X})
+\end{align*}
+
+Hence, we can model the conditional mean of the Poisson distribution using the same linear predictor as in the previous case. 
+
+* Good for count data (discrete and non-negative)
+* As seen in exploratory analysis, YC distributions look Poisson 
+* Allow for non-linearity (exponential)
+
+
+Notably, vanilla GLMs still assume independence of observations, which may be violated due to repeated exposure of referee and team levels. This is common in longitudinal studies, where there are repeated observations over time for repeated individuals (in our case, teams or referees), and is prevalent in healthcare or psychological studies, where causal effects (of treatments) are of interest. As noted by [@Zhang2012], where GLMMs (Generalised Linear Mixed Models) account for such intra-cluster correlations with random effects, the Generalised Estimating Equations use a sandwich type variance estimator (more on this later). 
+
+## Random effects (mixed models) theory 
+
+Random effects recognise that there is some hierarchical nature to the data.
+
+From [@Bolker2015], random effects can be seen as a way to combine information from different groups. It is a compromise between 'complete pooling' (e.g. for ecological studies, when we have very few observations for levels, and do not mind ignoring the differences between site groups) and 'no pooling' (small number of sites and large number of site observations), the latter which functions as regular fixed effects. 
+
+Mathematically, this means that we assume that the effects come from an underlying distribution, whose mean and variance can be estimated from the data, usually using a normal distribution with mean 0 (without loss of generality) and unknown variance. This way, for high cardinality categorical variables, the model saves a lot of degrees of freedom by reducing the effects to draws of a distribution, instead of $n_j$ levels and number of fixed effect estimates. For example, for a variable which we treat as a random effect $\mathbf{X_\text{random effect}}$, the coefficients are: 
+
+$$ \beta_{\text{random effect} ,\ j} \sim N(0, \sigma^2) \ \ \  \text{for} \ \ j = 1,2....n_j, \ \ \ n_j = \text{number of levels}$$ 
+
+Since we assume that the random effects come from parent distribution with a well-defined population mean, then the predicted effect for each level is a *weighted average* of the level-average and the overall average across levels, with the weight inversely related to the amount of variance. This 'shrinkage' effect will thus be larger for a level with less data and more noise, being pulled more to the overall mean [@Bolker2015]. 
+
+The shrinkage effect for a particular level j is given as the following [@Bolker2015] :
+
+$$\frac{\mu_{level j}/\sigma^2_{level j} + \mu_{overall}/\sigma^2_{overall}}{1/\sigma^2_{level j} + 1/\sigma^2_{overall}}$$
+
+where, continuing from an ecological perspective, level j could represent a particular site of research. 
+
+
+### Motivation for Mixed Models 
+
+As mentioned, we need random effects to factor in the likely within-cluster correlation within teams and referees (Fig \@ref(fig:PLOT-high-cardinality-variables)). Random effects are also good for dealing with high cardinality [@laird2023]. 
+
+According to [@Bolker2015], random effects are of interest when we are willing to trade testing for differences between levels (referees etc) for making inferences about the distribution of level effects, allowing us to quantify the variance within and among groups/levels, and to generalise to levels that were not measured in the data. They are particularly useful when we have a lot of levels (`r length(unique(raw_data_2$referee))` referees, `r length(unique(raw_data_2$team1_name))` teams), relatively little data on each level and even level sample sizes. (Refer to \@ref(fig:univariate-exploratory-plots-2-ref) and \@ref(fig:univariate-exploratory-plots-22-teams) ) 
+
+A common interpretation for taking a categorical variable as 'random effects' occurs when we view the selected levels as a 'sample from a larger population' of levels. 
+
+Therefore we combine mixed effects and GLMs to get GLMMs (Generalised Linear Mixed Models).
+
+The paper by [@Badiella2022] on the effects of cards on team performance also utilised GLMM (Poisson) to model goal count, accounting for 'experimental units that are sampled repeatedly', to provide more valid inferences. 
+
+## Theory, Motivation for GEE GLM (Poisson)
+
+A strong cause for Generalised Estimating Equations (GEEs) come from the mis-specification of models, such as in standard GLMs. [@chandler2023introduction] argues that the basic likelihood-based approach commonly fails with real world data, where bog-standard probability density functions with specified forms $f(x)$ do not match reality, providing wrong standard errors and thus inferences. 
+
+As such, the sandwich estimator [@liangzeger], used to give a better estimate of variances regardless of specification, is the following :
+
+```{r sandwich-estimator-image, fig.cap= "Sandwich Estimator (Eberly College of Science, PennState, online.stat.psu.edu)", out.width='50%'}
+
+knitr::include_graphics("sandwich estimator.png")
+
+```
+
+
+As with GLMMs, we are able to tackle (unknown) interdependencies within observations due to clustering effects. GEE-GLMs allow us to specify the specific correlation type (e.g. exchangeable, or AR1, or unstructured - see below) that we think might be appropriate for the particular use case. The main benefit is being able to produce good estimates of parameters without having to specify a full likelihood function for the model which can be difficult in some situations. GEEs can operate on fewer assumptions and give population level estimates for easier interpretability, on top of producing asymptotically correct standard errors for inferences, even with correlation misspecification [@pekar2018]. 
+
+```{r correlation-strcutures, fig.cap="Types of correlation structures for clustering (Eberly College of Science, PennState, online.stat.psu.edu)", out.width="50%"}
+
+knitr::include_graphics("correlation structures.png")
+```
+
+**Differences between GEE and GLMM** 
+
+Both GEE and GLMM seek out to factor in correlation for within cluster observations, which otherwise would violate the independence assumption in standard GLMs, albeit in different ways. From [@Barrett2019], the key difference lies in the interpretation: where GEE finds a population-level model, GLMM is subject specific, i.e. GEE looks at the average responses across the entire 'population' of teams and referees, while mixed effects focus on the individual levels. As mentioned where GLMM falls on normality assumptions for random effects, GEE avoids that altogether, providing consistent estimates regardless of correlation structure [@Zhang2012].
+
+
+## Running the GLM models 
+
+The focus on these models will be mainly on clustering of observations. 
+
+We carry on with most predictors from the linear counterpart, but omitting predictors that cause singularity issues, due to the sensitivity of `lme4` models. 
+First, we use a standard base R GLM to fit a `model_2.1_standardglm` model. Then, we add mixed effects, fitting a GLMM model `model_2.2_glm` via `lme4`, adding random effects on the intercept on referee and team. Finally, we fit a GEE GLM via `geepack` to get `model_2.3_geeglm_exch_1_ref`, using an interaction between referees and team. 
+
+For the GLMM, we use a crossed design [@Bolker2015] where 'at least one of the levels of each effect is repersented in multiple levels of the other effect', here being `referee` and `team`.  
+
+For the GEEGLM, however, we run into difficulties: to our best knowledge, the algorithm is unable to include separate clustering variables, and usually only uses one variable (e.g. patient ID). An option would be to add in an `interaction` between the variables, which would unfortunately now be clustering the variables together rather than separately. We decided to compromise by providing an interaction between `team` and `referee`. We note that the comparisons with GLMM would be much less direct now. 
+
+```{r poisson-models, warning=FALSE}
+Eng_train <- Eng_train %>% 
+  mutate_at(vars(team, opponent), droplevels)
+library(geepack)
+## 2.1 Standard GLM --------------
+model_2.1_standardglm <- glm(data = Eng_train, yellow_cards ~home + competition_level + covid_impacted + total_goals_implied_scaled + supremacy_implied_scaled + opponent + referee + team + 
+                               ## home interactions
+                               covid_impacted*home+ home*attendance + home*stadium_crowd_density + 
+                               factor(season) + matchweek*factor(season)+stadium_crowd_density + stadium_capacity  + stadium_dist, weights = caseweights_by_recency, 
+                             family = "poisson")
+#summary(model_2.1_standardglm)
+
+
+## 2.2 GLMM - Random effects for referee, team, opponent ---------------
+model_2.2_glmm <- lme4::glmer(data = Eng_train, yellow_cards ~  home + competition_level + covid_impacted + total_goals_implied_scaled + supremacy_implied_scaled + (1|opponent) + (1|referee) + (1|team) + covid_impacted*home+ home*attendance + factor(season) + matchweek*factor(season)+stadium_crowd_density + stadium_capacity + stadium_dist+ home*stadium_crowd_density, 
+                           nAGQ = 0,
+                            weights = caseweights_by_recency,
+                             family = "poisson")
+#summary(model_2.2_glmm)
+
+
+
+## 2.3 Gee GLM EXCHANGEABLE (no factor(season), no matchweek interaction)
+## CLUSTER ON BOTH REFEREE AND TEAM
+
+model_2.3_geeglm_exch_2 <- geepack::geeglm(yellow_cards ~ home + competition_level + covid_impacted + total_goals_implied_scaled + supremacy_implied_scaled + (opponent) + (referee) + (team) + covid_impacted*home+ home*attendance + factor(season) + matchweek*factor(season)+stadium_crowd_density + stadium_capacity  + stadium_dist+ home*stadium_crowd_density,
+                                         data = Eng_train,
+                                         weights = caseweights_by_recency,
+                family = poisson(),
+                id = interaction(team,referee),
+                corstr = "exchangeable")
+#summary(model_2.3_geeglm_exch_2)
+
+
+######### SIMPLE LINEAR MODEL ##########################
+model_2.4_simplelinear <- lm(data = Eng_train, yellow_cards ~home + competition_level + covid_impacted + total_goals_implied_scaled + supremacy_implied_scaled + (opponent) + (referee) + (team) + covid_impacted*home+ home*attendance + factor(season) + matchweek*factor(season)+stadium_crowd_density + stadium_capacity  + stadium_dist+ home*stadium_crowd_density, weights = caseweights_by_recency)
+```
+
+### Interpreting Poisson GLM
+
+Comparing the coefficients of the fixed effects linear model and the corresponding Poisson, we can see that the coefficients are different but are of very similar scale, since the coefficient of the Poisson GLM is not directly interpretable on the same scale of the outcome but rather on the exponential scale, i.e. represents the *change in the expected log count of YC*, due to the log-linear relationship. E.g. for a 1 unit increase in $X_1$ with coefficient $\beta_1$, we move from mean $\lambda_1$ to $\lambda_2$ 
+
+$$ \lambda_2 = exp({\mathbf{b^TX}})*exp(b_1) = \lambda_1*exp(b_1)$$
+
+Hence there is an exponential multiplicative effect on the mean via the coefficient, rather than the additive effect of linear models.  For example, for coefficient of `teamLiverpool`, the coefficients are -0.29 and -0.4 for GLM and LM, where the exponential multiplicative effect of Liverpool (with respect to Arsenal, all other variables equal) is `r round(exp(-0.29),3)` on the current $E(YC|\mathbf{X})$, while it is a decrease in $E(YC|\mathbf{X})$ of -0.4 in the linear model. 
+
+```{r england-GLM-interpretation}
+glm_coeffs  <- model_2.1_standardglm %>% geepack::tidy() %>%mutate(across(where(is.numeric), round, digits = 3))
+
+liverpool_rows <- glm_coeffs %>% filter(str_detect(term, 'Liverpool'))
+
+## TEAMS: 
+set.seed(11)
+teams_coeff <- rbind(glm_coeffs %>% filter(str_detect(term, "team")) %>% sample_n(size = 9), liverpool_rows[2,]) 
+
+## REFEREES
+set.seed(11)
+ref_coeff <- glm_coeffs %>% filter(str_detect(term, "referee")) %>% sample_n(size = 10)
+
+## OPPONENTS
+set.seed(11)
+opp_coeff <- rbind(glm_coeffs %>% filter(str_detect(term, "opponent")) %>% sample_n(size = 9), liverpool_rows[1,]) 
+
+## ELSE 
+else_coeff<- glm_coeffs %>% filter(!str_detect(term, "opponent") & !str_detect(term, "referee") &!str_detect(term, "team"))
+
+## COMBINED TABLE 
+separator <- c(rep("...", 5))
+final_coeffs_table <- rbind(teams_coeff, separator, ref_coeff, separator, opp_coeff, else_coeff)
+
+## SHOW TABLE 
+kableExtra::kbl(final_coeffs_table, 
+    caption = "GLM output table (England)",
+  #  format = 'latex',
+    digits = 3,
+    longtable = T)
+```
+
+
+Since coefficients operate on exponential scale, $\beta_i <0$ corresponds to a drop in $E(YC|\mathbf{X})$ since the multiplicative effect $exp{(\beta_i) <1 }$, conversely if $\beta_i >0$ then $E(YC|\mathbf{X})$ will increase. Hence, the direction operates similarly for Poisson GLMs and LMs, and as seen from the coefficient table the signs are generally the same for both.
+
+However, an interesting note is that compared to the LM equivalent (with the same formula/ set of predictors), many numeric predictors lost statistical significance (using 5% level), such as `competition_level2`, `covid_impacted`, `total_goals_implied_scaled`, `stadium_crowd_density`, and so on. 
+
+### Comparing Poisson Models 
+
+We take a look at how using different variants of the GLMs result in similar or different coefficients for the same selected teams and referees. This could provide an insight into whether the assumptions of the variants are strong enough or not. 
+
+```{r compare-GLM-to-LM-coeff, warning = F}
+## -- Compare standard GLM to standard LM ---------------
+
+## GLM COEFFICIENTS 
+glm_output <- (summary(model_2.1_standardglm)$coefficients) %>% as.data.frame() %>% rownames_to_column(var = "Term") %>% rename(glm_estimate = Estimate, glm_p_value = `Pr(>|z|)`)
+## LM COEFFICIENTS
+lm_output <-(summary(model_2.4_simplelinear)$coefficients) %>% as.data.frame() %>% rownames_to_column(var = "Term") %>% rename(lm_estimate = Estimate, lm_p_value = `Pr(>|t|)`)
+
+## GLM + LM COEFF
+summary_combined <- glm_output %>%
+  left_join(lm_output, by = "Term") %>%
+  select(Term, glm_estimate, lm_estimate, glm_p_value, lm_p_value)
+
+```
+
+
+
+
+```{r compare-GEE-GLMM-GLM-coeff}
+##############################################################################
+## -- Compare GLMM, GeeGLM to GLM: TEAMS coefficients ---------------
+# Gather glmm output
+glmM_output <- data.frame(nlme::random.effects(model_2.2_glmm))
+glmM_output <- glmM_output %>% mutate(Term = paste(grpvar,grp, sep = "")) %>% select(Term, glmm_estimate = condval)
+
+# Gather geeglm output 
+geeglm_output <- (summary(model_2.3_geeglm_exch_2)$coefficients) %>% as.data.frame() %>% rownames_to_column(var = "Term") %>% rename(geeglm_estimate = Estimate, geeglm_pvalue =  'Pr(>|W|)')
+
+## Add GEEGLM to GLM 
+summary_combined_geeglm_glm <- geeglm_output %>% left_join(glm_output, by = "Term") %>% 
+  left_join(lm_output, by = "Term") %>%
+  select(Term, glm_estimate, geeglm_estimate, lm_estimate,
+        glm_p_value, geeglm_pvalue, lm_p_value )
+
+## Add in GLMM
+summary_combined_geeglm_glm_glmm <- summary_combined_geeglm_glm %>% left_join(glmM_output, by = 'Term') %>% select(Term, glmm_estimate, glm_estimate, geeglm_estimate, lm_estimate,
+        glm_p_value, geeglm_pvalue, lm_p_value )
+
+## Turn summary comparison into long format
+coefficients_long <- summary_combined_geeglm_glm_glmm %>%
+  pivot_longer(cols = c(glmm_estimate, glm_estimate, geeglm_estimate, lm_estimate),
+               names_to = "Model",
+               values_to = "Coefficient")
+
+pvalues_long <- summary_combined_geeglm_glm_glmm %>%
+  pivot_longer(cols = c(glm_p_value, geeglm_pvalue, lm_p_value),
+               names_to = "Model",
+               values_to = "Coefficient")
+
+## --- SUBSET FOR TEAMS ONLY 
+teams_only_coeffs <- coefficients_long %>% filter(str_starts(Term, 'team'))
+teams_only_pvalue <- pvalues_long %>% filter(str_starts(Term, 'team'))
+
+## --- SUBSET FOR REFEREES ONLY 
+ref_only_coeffs <- coefficients_long %>% filter(str_starts(Term, 'referee'))
+ref_only_pvalue <- pvalues_long %>% filter(str_starts(Term, 'referee'))
+
+```
+
+```{r plot-coeffs-across-lm-geeglm-glm, warning=F, align = 'center', fig.cap="Coefficients for GLM, GLMM, GEEGLM and LM"}
+########## PLOT 50 TEAMS ONLY COEFF################################################
+teams_coeff_plot <- ggplot(teams_only_coeffs[1:50,], aes(x = Term, 
+                                       y = Coefficient, 
+                                       color = Model, 
+                                       shape = Model)) +
+  geom_point(size = 3, alpha = 0.7) +
+  labs(x = "", 
+       y = "Coefficient", 
+       color = "Model",  ## use legend to explain the color and shape
+       shape = "Model",
+       title = "50 Teams") +
+  scale_color_manual(values = c("blue", "red","darkgreen",'orange'), name =NULL) +
+  scale_shape_manual(values = c(16, 17,16,17), name =NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+  geom_hline(yintercept = 0, linetype = 'dashed', color = 'purple') +
+   theme(legend.position="bottom",
+        legend.text = element_text(size = 6),  # adjust size as needed
+        legend.key.size = unit(0.3, "cm"))
+teams_pvalue_plot <- ggplot(teams_only_pvalue[1:50,], aes(x = Term, 
+                                       y = Coefficient, 
+                                       color = Model, 
+                                       shape = Model)) +
+  geom_point(size = 3, alpha = 0.7) +
+  labs(x = "EPL Teams", 
+       y = "P values", 
+       color = "Model",  ## use legend to explain the color and shape
+       shape = "Model") +
+  scale_color_manual(values = c("blue", "red", 'orange'), name =NULL) +
+  scale_shape_manual(values = c(16, 17,16,17), name =NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+  geom_hline(yintercept = 0, linetype = 'dashed', color = 'purple')+
+   theme(legend.position="bottom",
+        legend.text = element_text(size = 6),  # adjust size as needed
+        legend.key.size = unit(0.3, "cm"))
+
+##############################################################################
+## -- Compare GLMM, GeeGLM to GLM: REFEREE coefficients ---------------
+ref_coeff_plot <- ggplot(ref_only_coeffs[1:50,], aes(x = Term, 
+                                       y = Coefficient, 
+                                       color = Model, 
+                                       shape = Model)) +
+  geom_point(size = 3, alpha = 0.7) +
+  labs(x = "", 
+       y = "", 
+       color = "Model",  ## use legend to explain the color and shape
+       shape = "Model",
+       title = "50 Refs") +
+  scale_color_manual(values = c("blue", "red","darkgreen", 'orange'), name =NULL) +
+  scale_shape_manual(values = c(16, 17,16,17), name =NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+  geom_hline(yintercept = 0, linetype = 'dashed', color = 'purple') +
+    theme(legend.position="bottom",
+        legend.text = element_text(size = 6),  # adjust size as needed
+        legend.key.size = unit(0.3, "cm"))
+ref_pvalue_plot <- ggplot(ref_only_pvalue[1:50,], aes(x = Term, 
+                                       y = Coefficient, 
+                                       color = Model, 
+                                       shape = Model)) +
+  geom_point(size = 3, alpha = 0.7) +
+  labs(x = "EPL Ref", 
+       y = "", 
+       color = "Model",  ## use legend to explain the color and shape
+       shape = "Model") +
+  scale_color_manual(values = c("blue", "red", 'orange'), name =NULL) +
+  scale_shape_manual(values = c(16, 17,16,17), name =NULL) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+  geom_hline(yintercept = 0, linetype = 'dashed', color = 'purple')+
+   theme(legend.position="bottom",
+        legend.text = element_text(size = 6),  # adjust size as needed
+        legend.key.size = unit(0.3, "cm"))
+
+
+## ARRANGE PLOTS 
+# ggpubr::ggarrange(teams_coeff_plot, teams_pvalue_plot, ncol = 1)
+# ggpubr::ggarrange(ref_coeff_plot, ref_pvalue_plot, ncol = 1)
+
+library(patchwork)
+(teams_coeff_plot/teams_pvalue_plot)|(ref_coeff_plot/ref_pvalue_plot)
+
+```
+
+
+**GLM vs LM**
+As confirmed in the literature review, the GLM and LM coefficients generally differ to some degree but have the same direction (sign), thus having the same qualitative interpretations. The GLM p values are generally higher than that of LM, likely due to the difference in distributional assumptions (Poisson in GLM, Normal in LM) and log-linearity vs regular linearity. As we will see later on, the AIC is much smaller for the GLM, possibly suggesting that the distributional assumptions of Poisson GLM is much stronger.
+
+**GLMM**
+The coefficients for GLMM come from the `ranef` coefficients, which represent each level's deviation from the population mean, and we can clearly see that they have been pooled/undergone shrinkage. 
+
+**GEE**
+The GEEGLM coefficients are very similar to that of GLM, suggesting that the impact of adding a correlation structure within the clusters ('exchangable') was negligible. 
+
+```{r compare-glmm-glm-geeglm-metrics, warning=FALSE}
+library(performance)
+## --INTERNAL METRICS ---------------
+glm_internal_metrics <- compare_performance(model_2.1_standardglm, model_2.2_glmm, 
+                    model_2.3_geeglm_exch_2, 
+                    model_2.4_simplelinear,
+                    metrics = c('AIC', "BIC"),verbose = F)
+
+
+## -- EXTERNAL METRICS 
+
+## Prepare an empty data frame to store the results
+comparison_table <- data.frame(Model = character(), Test_RMSE = numeric())
+
+## List of models
+models <- list(model_2.1_standardglm = model_2.1_standardglm, 
+               model_2.2_glmm = model_2.2_glmm, 
+               model_2.3_geeglm_exch_2 = model_2.3_geeglm_exch_2, 
+               model_2.4_simplelinear = model_2.4_simplelinear)
+
+## Loop through models and calculate RMSE for each
+for(model_name in names(models)) {
+  model <- models[[model_name]]
+  
+  ## Predict on test data
+  predictions <- predict(model, newdata = Eng_test)
+  
+  ## Calculate RMSE and add to the comparison table
+  rmse <- calculate_rmse(predictions, Eng_test$yellow_cards)
+  comparison_table <- rbind(comparison_table, data.frame(Name = model_name, Test_RMSE = rmse))
+}
+
+kable(comparison_table %>% right_join(glm_internal_metrics, by = 'Name') %>% select(Model,  AIC, BIC,Test_RMSE),
+      caption = "GLMs comparisons", 
+      align = "c") %>%
+  kable_styling(latex_options = 'HOLD_position')%>%
+  kable_classic_2() %>%
+    add_header_above(c(" " = 1,"Internal Metrics" = 2, "External Metric" = 1))
+
+
+```
+
+Out of the **Generalised** models (that allow for a exponential link function), the GLMM gives the best results on model fit (AIC, BIC), as well as generalisation, possibly indicating using random effects for the clusters (referee, teams, etc) and the associated hierarchical shrinkage helps to explain the within cluster heterogeniety for YCs and improves the model prediction. 
+
+Nevertheless, although linear model greatly suffers in AIC and BIC, possibly due to distributional misspecifications, it excels on prediction power, significantly lower than the generalised models. 
+
+### Other evaluation: 
+
+```{r, include=FALSE}
+summary(model_2.2_glmm)
+```
+
+
+```{r dispersion-tests-for-glms, include=FALSE}
+## OVERDISPERSION CHECK -----------------
+AER::dispersiontest(model_2.1_standardglm, alternative = 'greater')
+
+## UNDERDISPERSION CHECK ----------------
+library(DHARMa)
+glmsimulationOutput <- simulateResiduals(fittedModel = model_2.1_standardglm, plot = F)
+glmMsimulationOutput <- simulateResiduals(fittedModel = model_2.2_glmm, plot = F)
+gEElmsimulationOutput <- simulateResiduals(fittedModel = model_2.3_geeglm_exch_2, plot = F)
+DHARMa::testDispersion(glmsimulationOutput, alternative = 'less')
+DHARMa::testDispersion(glmMsimulationOutput, alternative = 'less')
+DHARMa::testDispersion(gEElmsimulationOutput, alternative = 'less')
+
+```
+
+We tested for dispersion using `DHARMa` package (Hartig, 2022), which provides a simulation based methods to create residuals for generalised linear mixed models.
+
+Although the models clearly do not suffer from overdispersion, commonly the first check, they suffer from the opposite, with p values of essentially 0 for all underdispersion tests. Subsequently, Negative Binomial models were fitted, but revealed to have not much difference in prediction power to Poisson (refer to appendix), hence we carry on with the Poisson models. 
+
+Another limitation is that the variances of the random effects for all 3 categorical variables are very low, at 0.0033145, 0.0004137, 0.0005821 respectively. This implies that variability between levels are low, and perhaps not well captured by a mixed effects model. 
+
+#### Repeat Poisson GLMs for all other countries
+
+```{r repeat-GLMs-for-all-other-countries, warning=FALSE, results='hide', message=FALSE}
+country_list <- c("England", "Spain", "Germany", "Italy", "France")
+## Fitting glms for other countries, and filling up of performance_table and RMSE_test_table tables are done in a separate R file : "REPEAT_GLMs_OTHER_COUNTRIES_CODE"
+
+## Load in saved objects from separate R file 
+load("../testing/repeat_glms_othercountries")
+
+## Make the table for GLM other countries comparison
+performance_table$Country <- rep(country_list[2:5], each = 4)
+performance_table$Name <- RMSE_test_table$Name
+RMSE_test_table$Country <- rep(country_list[2:5], each = 4)
+poisson_comparison_table <- performance_table %>% left_join(RMSE_test_table, by = c('Country', "Name"))
+
+
+```
+
+```{r kable-GLM-country-comparison}
+poisson_kable <-kable(poisson_comparison_table %>% select(Country, Model, AIC, RMSE, test_RMSE), caption = "Linear Models for all Countries", 
+      align = 'c') %>% 
+  add_header_above(c("Linear Models" = 2,"Internal Metrics" = 2, "External Metric" = 1)) %>%
+  kable_styling(latex_options = "HOLD_position") %>% 
+  row_spec(row = c(1,2,3,4,9,10,11,12), background = "#D3D3D3") %>%
+  kable_classic_2() %>% 
+  footnote(general = c("Upon latest fit, Germany and Italy returned a boundary singular fit, likely for glmer - proceed with caution"))
+
+poisson_kable
+```
+
+Across the board from Table \@ref(tab:kable-GLM-country-comparison), LM had the best prediction power on test set despite (or because of) a lower fit to the training data, especially AIC. Amongst the generalised models, GLMM tended to have the best AIC fit as well as prediction power. GEEGLM failed to improve on GLM, hence will be omitted henceforth. 
+
+^[For consistency, we used the same formula for the models across all countries - which resulted in 'singularity fit' warnings for Germany and Italy, most likely when using the GLMM fitting algorithm. Future research could perform better model selection to reduce multicollinearity, which is the suspected reason for the issue.]
+
+
+# Model 3: Random forests/ Tree based models (full data models)
+
+## Motivation for tree-based methods
+
+As we proceed to non-parametric, non-linear models in hopes of achieving better predictability, a particular machine learning algorithm stands out - tree based models. 
+
+* High dimensionality
+
+Tree based models are more resistant to additional 'non-informative predictors' than linear and non-linear models, growing in RMSE much less slowly than the others when the number of predictors increases. Thus they are less susceptible to dimensionality issues, and do not attempt to partition the input space (predictors) across all values/levels. [@boehmke2020]
+
+Moreover, trees efficiently disregard unnecessary variables or levels, only considering those that aid in prediction [@UCLSTAT0030]. This could be particularly beneficial for high-cardinality.
+
+Furthermore, from [@Hastie2009],  
+
+* Tree-based models can capture interactions between predictors
+
+* Handle missing data (*implementation subject to the specific R package*) ^[Initially, but no longer useful for our data after updated version]
+
+* Naturally handle both continuous and categorical type predictors 
+
+### Decision Tree Theory
+
+The commonly used method is the Classification and Regression Trees (CART) model from [@breimanfriedman1984] and relies on the partitioning of input feature space recursively, via binary splits. For the case of classification, the split is done to minimise the gini impurity or entropy, while for regression the criterion could be MSE as a measure of goodness of fit. The tree searches through the values of the predictors and picks the best split to separate the observations. This is done until some stopping mechanism, such as reaching a minimum node size, or a minimum level of entropy, etc. This is considered 'greedy' - the algorithm optimises for the best criterion (gini/entropy/MSE) at the split level, instead of the entire tree. After the tree has been fitted, a prediction will be determined by the leaf node it falls into, where the output will be the most common class (classification, as shown in the image below) or the mean value (regression, see below) of the leaf node. 
+
+```{r decision-tree-image,fig.cap="Decision Tree on Iris Data (Boehmke and Greenwell, 2020)", out.width="50%"}
+knitr::include_graphics("iris-decision-tree-1.png")
+```
+
+
+For the regression case, $$ f(x) = E[Y|\mathbf{x}] = \sum_{1}^{K}{\mu_k} * I(\mathbf{x} \in R_k) $$, where $R_1....R_K$ are the partitioned space of the input space, and $\mu_k$ represents the mean value of the particular partitioned space $R_k$ [@UCLSTAT0030]. 
+
+However, it is well known that decision trees are prone to overfitting, and the internal structure can be unstable. 
+Hence, they are mostly used as units in ensemble methods that draw on their benefits while improving generalisability.
+
+## Random Forest Theory and Benefits
+
+Random forests (RF) rely on the 'wisdom of the masses', being an ensemble of independently trained trees, from which we take the aggregate decision. From @Hastie2009, RFs use the concept of bagging (bootstrap aggregation) to enhance generalisability of the overall model. This works by using bootstrap sampling to train trees on different subsets of the original dataset, and further decorrelates the trees by considering a random subset of predictors to pick from at each split. After fitting the trees, a linear combination of each of the individual 'votes' gives the final prediction, where each tree is given equal weight. The algorithm [@Hastie2009] is the following: 
+
+```{r rf-algo, fig.cap="Fitting Algorithm for Random Forests (ESL)", out.width='60%'}
+knitr::include_graphics("random forest algo.jpeg")
+```
+
+
+More can be read from [@Breiman2001].
+
+There are numerous strengths of using RFs. @Hastie2009 claim that the model does competitively well in general, such as on the canonical `spam` dataset example, and requires 'very little tuning', in agreement with @Probst2018 who show little differences when tuned. Furthermore, they can be efficiently trained through parallelisation with modern implementations, such as `ranger` and `h20` [@boehmke2020].
+
+## Data Preprocessing (full data)
+
+```{r preprocessing-for-ENTIRE-DATA}
+# Use 80% for training again 
+test_indices <- test_indices_generator(data_2_reshaped_imputed_5)
+full_test <- data_2_reshaped_imputed_5[test_indices, ]
+# Use the remaining data as the training dataset
+full_train <- data_2_reshaped_imputed_5[-test_indices, ]
+```
+
+
+The full data is used now. We use the same train test split as before, which focuses on testing most recent games for better relevance. Models are still trained with case weights that prioritise more recent observations. 
+
+## Running the RF models
+
+For RandomForests, we use the `ranger` package [@ranger] -  RANdom forest GEneRator(ranger) - which is very applicable to our high dimensional dataset, being built for genomic data such as GWAS (genome-wide association studies. The authors tested `ranger` against the other most commonly used random forests packages, such as `randomForest` [@liawweiner], on simulated data, and `ranger` was shown to outperform the rest in terms of runtime for an increase in number of trees, features, sample size and `mtry` i.e. number of variables considered at each split. 
+
+^[Limitation: this regression-based random forest algorithm optimises on RMSE, which is unideal for count data (better to use deviance as metric). We sacrifice this for the computational ability of the ranger for our large dataset.]
+
+```{r random-forest-fitting-and-tuning, cache = T}
+## RANDOM FORESTS ranger package
+## fitting done in a separate file called "FIRST_RF_FITTING.R"
+
+load("../testing/first_rf_objects")
+
+## Table of results from first hyperp tuning
+kable(hyperp_grid %>% arrange(OOB_RMSE) %>% head(), caption = "Results from hyperparameter tuning for ranger") %>% kable_classic_2()
+
+```
+
+**Ranger Results**
+
+The benefit of bagging is the left-out subset of data that is not used to train the trees i.e. the out-of-bag (OOB) data that the model can test on and give an estimate on test error. Here, we get an OOB MSE of 1.63, with an R^2 of 0.10. The number of trees used was 500, and the `mtry` was at a default value of 4. 
+
+We set a hyperparameter grid space of different combinations of `mtry` and `num.trees` and tested their OOB RMSE [@boehmke2020], and found little variance in the RMSE. Hence we stick to the default values. Here, the OOB RMSE serves as a proxy for validation error. 
+
+### RF evaluation: Variable importance 
+
+
+```{r random-forest-evaluation-VARIABLE-IMPORTANCE, fig.cap="Variable Importance: Permutation vs Impurity"}
+## IMPURTIY -- Make dataframe
+impur_importance_df <- data.frame(rf_model_regression_impur$variable.importance) %>% rownames_to_column() %>% rename(variable = rowname, importance = `rf_model_regression_impur.variable.importance`)
+
+permut_importance_df <- data.frame(rf_model_regression_permut$variable.importance) %>% rownames_to_column() %>% rename(variable = rowname, importance = `rf_model_regression_permut.variable.importance`)
+
+
+impur_plot <- ggplot(impur_importance_df, aes(x=reorder(variable,importance), y=importance,fill=importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("Permut. Import")+
+      guides(fill=F)+
+      scale_fill_gradient(low="red", high="blue")
+
+permut_plot <- ggplot(permut_importance_df, aes(x=reorder(variable,importance), y=importance,fill=importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("Impur. Import")+
+      guides(fill=F)+
+      scale_fill_gradient(low="red", high="blue")
+
+impur_plot|permut_plot
+```
+
+
+We plot the variable importance [@Sam2018] in \@ref(fig:random-forest-evaluation-VARIABLE-IMPORTANCE), which shows us the decreasing order of 'amount of contribution' each predictor goes into determining the final outcome. Usually, for bagged decision trees, feature importance corresponds to the amount of variance explained (SSE) by each predictor in a tree across all splits, aggregated across all trees, which is the case with `importance = 'impurity'`. With `importance = permutation`, we allow for each OOB sample to be passed down a tree, and then we randomly permutate each feature to see how much the final outcome is affected [@boehmke2020], which serves as a proxy for how influential a variable is in determining the outcome. According to the sklearn documentation, '*Permutation feature importance overcomes limitations of the impurity-based feature importance: they do not have a bias toward high-cardinality features and can be computed on a left-out test set*'. Hence impurity alone is not sufficient and we need permutation to allow for some generalisability, and we may expect our high cardinality variables (referee, team, opponent) to be over-represented. 
+
+Interestingly, for **impurity**, we do not see the aforementioned categorical variables on the leaderboards - instead, we have `country`, followed by `attendance` and `sup_implied`, with `country` leading by a large margin. Instead, they are found close to the bottom, above `covid_impacted`, `stadium_runningtrack` and `yellow_card_lag1`. 
+
+As for **permutation**, the top variables are `sup_implied`, `referee_experience` and `tg_implied`, having one common variable in the top three (`sup_implied`). Here, the highly cardinal variables take a much higher position (4th, 6th and 7th places). This might be a better indication of their performance. 
+`covid_impacted` was of low importance for both metrics, and `running_track` was relegated to the bottom as well. 
+
+Unfortunately, the importance metrics represent 'global importance' for the variables and we are unable to see the interesting interactions that we used the model for. 
+
+## Gradient Boosting Theory
+
+Gradient boosting, like random forest, is an ensemble method that commonly makes use of trees as the base learners. The idea of boosting is to convert individual weak learners that are only slightly correlated with the outcome. 
+
+Unlike random forests, here we iteratively add trees sequentially, boosting the performance by optimising the latest tree on the most recent residuals of the overall model [@UCLSTAT0030]. For the regression case, we can represent the ensemble via 
+
+$$ E(Y|\mathbf{x}) = f(\mathbf{x}) \equiv \sum_{m = 1}^{M}{\beta_m b(\mathbf{x}; \gamma_m)} $$ 
+
+whereby each $\beta_m b(\mathbf{x}; \gamma_m)$ represents a tree with its own parameter, and are fitted via the following algorithm (UCL 2023)
+
+```{r gb-equation, fig.cap="Gradient Boosting Fitting (UCL 2023)", out.width="90%"}
+knitr::include_graphics("gradient boosting equation.jpeg")
+```
+
+The second step illustrates the fitting process: adding a new unit that minimises current residual (SSE) from the fitted model, then adding it into the ensemble. This optimisation process is done via gradient descent, which gives the name in "gradient boosted models".
+
+### Gradient Boosting Benefits 
+
+Notably, for data outside the realm of image and natural language processing, boosting attains similar standards as neural networks on tabular data, with XGBoost being the mainstay for practitioners [@kossen2021]. Gradient boosted models (GBMs) have been popular across many domains, and is highly used on Kaggle, which famously had 17 challenge winning that used gradient boosted methods (XGBoost) for model training [@ChenG16]. From the Elements of Statistical Learning, Hastie et al. show how boosting outperforms random forests over a specific number of trees on the `California housing data`, where the latter stabilised at around n.trees = 200, meanwhile the boosting method continued to improve, in terms of average absolute error. 
+
+## Running the GBM
+
+For our particular task, we use the `gbm` package [@gbm2022] that implements Friedman's generalisation of Adaboost back in the 1990s [@Freund1999] to regression problems and other loss functions [@Friedman2001]. It allows for the appropriate Poisson distribution to be specified, and hence potentially a better fit (the random forest approach via `ranger` lacked this). 
+
+```{r fitting-GBM-and-hyperparam-tune, cache = T}
+library(gbm)
+
+## hyperparameter tuning and fitting of gbm model done on a separate R file titled "FIRST_GBM_MODEL_HYPERPARAM_AND_FIT.R"
+
+## Load the hyperparameter tuning results
+load("../testing/tuning_results_firstgbm")
+## Load the GBM model (that was fitted with best params from hyperparam tuning)
+load("../testing/trees_boosted_poisson_fit")
+
+## Sort by OOB RMSE for best hyperps
+kable(tuning_results %>% arrange(OOB_RMSE) %>% head(), caption = "Results from hyperparameter tuning for gbm") %>% kable_classic_2()
+```
+
+
+For hyperparameter tuning, we use the same strategy as before and calculate the OOB RMSE as an indication of validation performance. Higher (3 onwards) interaction depths were chosen to allow for interactions between predictors, which should not overfit too much considering our high dimensionality with a decent sample size. 
+
+From the gridsearch calculations, the first thing we notice is that we have finally crossed below the RMSE of 1 mark. The optimal hyperparameters are: 5, 1200 and 0.1 for the `interaction.depth`, `n.trees` and `shrinkage`, which is similar to learning rate - notably, we are choosing the most complex models (highest number of most complex trees). 
+
+```{r re-run-GBM-on-best-hyperparams}
+## Refer to previous chunk for model fit
+
+```
+
+
+### gbm evaluation: Variable importance 
+
+```{r gbm-evaluation-VARIABLE-IMPORTANCE, fig.cap="gbm Variable Importance", out.width="70%"}
+gbm_df <- gbm::summary.gbm(trees_boosted_poisson_fit, plotit = F) %>% rename('variable' = 'var',
+                                                            'importance' = 'rel.inf') 
+
+ggplot(gbm_df, aes(x=reorder(variable,importance), y=importance,fill=importance))+ 
+      geom_bar(stat="identity", position="dodge")+ coord_flip()+
+      ylab("Variable Importance")+
+      xlab("")+
+      ggtitle("Permutation Importance")+
+      guides(fill=F)+
+      scale_fill_gradient(low="red", high="blue")
+```
+
+Here we see the obvious shift away from the other variables towards the 3 high cardinality variables, with a distant 4th being `sup_implied`. This `gbm` model emphasises that the number of cards are most commonly determined by the two teams who are playing against each other, and the referee officiating, though significantly less important. 
+
+If the `gbm` is indeed the appropriate model, it is possible to make sense of the results. Cards may be strongly determined by the two teams playing against each other, and they capture the other information such as crowd density, goals likely to be scored, rivalries, etc. Referees ostensibly play a big part, with some being stricter or more lenient than others, and referees may be primed to behave in a certain way given the teams they are disciplining. 
+
+There is an obvious sparsity here compared to the random forest version - gradient boosted trees are made of relatively simpler base learners (decision stumps) compared to that of random forests which are deeper, although we had allowed an interaction depth of 5 in the former. Thus it is natural that boosting ends up avoiding some variables completely, unlike random forests [@Friedman2001].
+
+However, a simple check on the test set (shown later in model comparison) reveals that our strategy of tuning results in a very high test RMSE of over 4. To attempt to reduce this, we try the tuning method of [@boehmke2020]. Unlike Random Forests, GBM is sensitive to changes in hyperparameters [@Probst2018]. 
+
+The authors suggest a strategy of first finding the learning rate, then optimal number of trees, before tuning the tress specific parameters. They also used a `cv.fold` value of 10, which should provide a decently robust estimate of errors. Their method includes tuning `n.minobsinnode`, which further controls tree complexity. The result of the gridsearch is below, and since the top three have the same RMSE, we choose the least complex (3rd) option, to refit another gbm model `trees_boosted_poisson_fit_2` or `gbm2`
+
+
+```{r boehmke-tuning-part1}
+```
+
+```{r boehmke-tuning-part2, cache = T}
+```
+
+```{r rerun-gbm-based-on-2nd-hyperparam-tuning}
+load("../testing/tree_boosted_poisson_fit_2")
+load("../testing/boehmke_best_hyperps")
+```
+
+We also apply the authors' tuning method for the ranger random forest model to produce `RF2`, which tuned more parameters such as `sample.fraction` and `min.node.size`, which control the fraction of observations from the training set to use for fitting and tree complexity respectively. 
+
+```{r boehmke-RF-hyperparam-tuning, cache=TRUE}
+
+```
+
+```{r refit-rf-based-on-boehmke-hyperp, cache=TRUE}
+load("../testing/rf_2")
+```
+
+
+So far we have explored separately: mixed effects and tree-based models to deal with high dimensionality, namely with the high number of teams and referees, which also accommodates for levels with fewer levels of data (at least for mixed effects models). 
+
+## GPBoost theory, benefits 
+
+Now, we combine the two to get a tree-boosted random effects model via work from [@Sigrist2020]. As the author explains, although tree-boosted models are generally regarded as the 'most effective off the shelf non-linear learning method for a wide range of application problems' [@johnson2014learning], they are not perfect where the response variables are dependent and with high-cardinality.
+
+The R package `gpboost`, using the GPBoost (Gaussian Process Boosting) [@Sigrist2020], introduces a novel method of combining boosting with Gaussian processes and mixed effects. They are essentially flexible, non parametric models for regression and classification and are able to achieve high prediction power. They are a method of defining a distribution over functions with a multivariate Gaussian distribution, fully defined by mean and covariance functions. In GPBoost, an ensemble of trees are used to model the non-linear prediction function (a relaxation of the linear assumption in Gaussian processes). We are also able to specify the likelihood function for the outcome variable as Poisson.
+
+From @Sigrist2023, the algorithm has also been shown to outperform other similar variants, such as basic linear mixed effects models, to deep neural networks with random effects, on an array of datasets chosen due to the precense of high-cardinality categorical variables, from Airbnb, IMDb, etc. 
+
+## Running GPBoost
+
+Hence, we fit a `gpboost` model, following the model building steps and hyperparameter tuning from [@sigristmedium2023], via a gridsearch and a 10% validation split from within the training data, using MSE as the criteria. The optimal parameters are given in \@ref(tab:GPBOOST-MODEL-BY-SIGRIST)
+
+```{r GPBOOST-MODEL-BY-SIGRIST, cache=TRUE, warning = F, message=FALSE}
+
+## Model refitting, and calculation of test and train residuals done in a separate file "R_gpboost_testing.R"
+
+## Hyperparameter tuning also done in that file 
+
+
+## Load in the results 
+load("../testing/gpbst_resid_data") ## contains model, test resid, train resid, train and test predictions
+load("../testing/opt_params")
+kable(as.data.frame(unlist(opt_params)), caption = "Best parameters for GPBoost (from tuning)") %>% kable_styling(latex_options = 'HOLD_position') %>% kable_classic()
+```
+
+### GPboost evaluation: Variable importance
+
+```{r fig.cap="SHAP values for GPBoost", out.width= "70%"}
+knitr::include_graphics("../testing/SHAP_gpboost.png")
+```
+
+SHAP (SHapley Additive exPlanation) values are derived from game theory and represents a type of feature importance. In this case, this could only be used to examine non-cardinal predictors. We can see that `country` was the most important, followed by goal supremacy, then jointly `matchweek` and `home`. From the wide range of SHAP values of goal supremacy, we can see that this feature has a varied effect on the outcome on the different observations, more so than e.g. `matchweek`. The colour shades also tell us that generally, higher goal supremacy leads to a negative effect on YC, which was corroborates with our exploratory analysis. 
+
+# Testing and comparing all models: LM, GLM, RF, GBM
+
+To compare all models, we refit a linear model (LM), a generalised linear model (GLM), a mixed effects linear model (LMM) and generalised linear mixed model (GLMM) with the full dataset, adding in some interactions involving `home` and `country` predictors. The summary tables will be shown in the appendix for curious readers (e.g. country effects previously not included, or to compare coefficients with the England only case). 
+
+**Nested vs non-nested mixed effects models**
+
+With each country and league having its own unique set of teams (and referees), this introduces a hierarchical structure, where the original high-cardinality variables are now nested within countries. If we assume that each country has its own idiosyncracies pertaining to referee and team effects, this would be captured by the nesting structure. We fit LMMs and GLMMs with and without the nested structure, and test with an ANOVA test to see if the nesting effect is significant. 
+
+Once again, the mixed effects models suffered from singularity when all predictors were chosen and a simple method of model selection via choosing significant predictors from the full linear model was employed (a method that understandably has limitations), as the `lme4` documentation recommended against overly complex models in such situations. 
+
+```{r final-model-comparison, cache=TRUE, warning=F, message=FALSE, results='hide'}
+## The code for fitting the linear models with the full dataset is done in a separate R file called 
+
+load("../testing/total_linear_model")
+load("../testing/total_glm")
+load("../testing/total_lmm_not_nested")
+load("../testing/total_glmm_not_nested")
+
+## Total Linear Model outcomes 
+total_lm_r2 <- summary(total_linear_model)$r.squared
+total_lm_adj_r2 <- summary(total_linear_model)$adj.r.squared
+
+## GLMM and LMM results 
+lme4::VarCorr(total_lmm_not_nested)
+lme4::VarCorr(total_glmm_not_nested)
+```
+
+## Results 
+
+The ANOVA likelihood test revealed the nesting by country to be insignificant which also added complexity that resulted in singularity warning. Hence, we go ahead with the non-nested versions. 
+
+The R^2 and adjusted R^2 are `r round(total_lm_r2,3)` and `r round(total_lm_adj_r2, 3)` respectively, an improvement from the England-only case. 
+
+## Interesting results (full linear model)
+
+```{r}
+## Summary table -- filter out high cardinality variables such as teams and ref
+## Filter out insignificant coefficients
+interesting_results_table <- summary(total_linear_model) %>% geepack::tidy() %>%
+  filter(!str_detect(term, "team")&!str_detect(term, "opponent")&!str_detect(term, "referee")) %>% select(term,estimate, p.value) %>%
+  mutate(estimate = round(estimate,3),
+         p.value= round(p.value,3)) %>% 
+    filter(p.value < 0.1 & abs(estimate) > 0.1)
+
+kable(interesting_results_table, 
+      caption = "Some results from full linear regression") %>% kable_styling(latex_options = "HOLD_position",
+                                                                              position = "center") %>% add_footnote("High Cardinality categorical variables filtered out, alongside non-significant coefficients") 
+
+```
+
+We look at the results from the linear model (fixed effects), filtering out the highly cardinal categorical variables (too rows many to display), variables with p values greater than 0.1 and variables with coefficients that are too small (less than 0.1).
+
+We now see that `home` effect has finally gained significance  and the polynomial effects of `matchweeks` become much clearer now with the full data instead of the England-only subset. The shape of the polynomial differs between countries, as with the running track effect. 
+
+## Full comparison
+
+```{r prekable-compare-total-models, cache=TRUE}
+###### RUN ALL PREDICTIONS (LM, GLMM, RF and GBM) ####################
+
+## Code to populate final_comparison_table done in separate R file titled: "FINAL_MODELS_COMPARISON_KABLES.R"
+
+load("../testing/final_comparison_table")
+
+```
+
+
+```{r kable-final-comparison-table}
+kable(final_comparison_table, 
+      caption = 'Final Model Comparisons') %>%
+  kable_styling(full_width = T, 
+                latex_options = "HOLD_position") %>%
+  add_header_above(c("Model" = 1, "Internal" = 2, "External" = 1)) %>% 
+  kable_classic_2() %>% 
+  add_footnote("Internal RMSE estimates vary in precision - e.g. gbm2 (Boehmke 2020) used CV, likely more precise than gbm1, and are OOB estimates for tree-based models")
+```
+
+
+```{r graphical-plot-for-comparison-table, fig.cap="Comparison across all models"}
+long_comparison_table <- final_comparison_table %>% select(-AIC) %>% 
+  gather(key = "Metric", value = "Value", -model) %>% replace_na(list(Value = 0))
+
+ggplot(long_comparison_table, aes(x = factor(model, levels = final_comparison_table$model), y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") + 
+  labs(title = "Model Comparisons", 
+       y = "RMSE", 
+       x = "Model") +
+  theme_minimal() + 
+  scale_fill_brewer(palette = "Set2", name = "Metric") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom")
+
+```
+
+We arrange both the final comparison Table \@ref(tab:kable-final-comparison-table) and Fig \@ref(fig:graphical-plot-for-comparison-table) in order of 'Test RMSE'. We can see that RF models do have the best fit, they also generalise the best to unseen data, although the slight increases in test error the linear models make up quite a lot in terms of model fit (much lower 'Internal RMSE'). The GPBoost model, although more similar to the gbm model as they are tree-boosted algorithms, fares very closely to the random forest models. The generalised linear models and gbm ones fared the worst, with more than double of test error - this is could be related to the fact that the train error is so low, and are likely attributed to overfitting. In terms of the best train fit, the Poisson log-link GLM takes the top spot. 
+
+We moved from simple models, to mixed effects, to tree-based models, each time increasing complexity to take advantage of some characteristics of the data. Adding mixed effects to (generalised) linear models do not seem to drastically change results, but did for tree boosted models, as with the gpboost model. The closeness in performance of linear models to that of random forests could suggest that the ability of the latter to handle non-linearity, interactions and outliers was less fruitful than expected. For ensemble models, training independent trees instead of sequential ones seem to fit this dataset much better by ostensibly discouraging overfitting. 
+
+
+
+### Evaluation of model : analysing residuals
+
+```{r get-training-fit-residual}
+## Model residuals
+
+## Create a dataframe of TRAIN fitted residuals for each model
+residual_data <- data.frame(
+  yellow_cards = full_train$yellow_cards,
+  resid_linear_model = resid(total_linear_model),
+  resid_glm = resid(total_glm),
+  resid_lmm = resid(total_lmm_not_nested),
+  resid_glmm = resid(total_glmm_not_nested),
+  resid_random_forest = full_train$yellow_cards - rf_model_regression_permut$predictions,
+  resid_gbm =full_train$yellow_cards - predict(trees_boosted_poisson_fit_2, full_train),
+  resid_gpboost = train_gpbst_resid
+)
+
+## Reshape table 
+residual_data_long <- pivot_longer(residual_data, 
+                                   cols = starts_with("resid_"), ## column names (i.e. model names )
+                                   names_to = "Model", ## end point for column names 
+                                   values_to = "Residuals") ## values of interest
+
+
+
+```
+
+```{r PLOT-training-residuals, fig.cap="Residual Analysis across models (Training set)"}
+
+## PLOT RESID DISTRIBUTION PER MODEL 
+ggplot(residual_data_long, aes(x = as.factor(yellow_cards), y = Residuals, fill = Model)) +
+  geom_violin(scale = "width", trim = FALSE) +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +  # Add the horizontal line at y = 0
+  labs(x = "Actual Yellow Cards", y = "Residuals",
+       title = "Distribution of Residuals by Actual Yellow Cards for Each Model") +
+  facet_wrap(~ Model, ncol = 2, scales = "free_y") +
+  theme_minimal() +
+    coord_cartesian(ylim = c(-max(abs(residual_data_long$Residuals)), max(abs(residual_data_long$Residuals))))
+
+```
+
+
+There is a very clear pattern across all models: for low values of YCs, models tend to overpredict for small values of YC, and underpredict for large values of YC. As with the previous table comparing the performances \@ref(tab:kable-final-comparison-table), the simpler, parametric models achieved the best fit, barring the linear mixed model - but for the generalised versions that used log-links (Poisson family), the generalisability was badly affected. 
+
+The obvious systematic increase residuals as the number of YC increased could be the result of many possibilities: 
+
+* model mispecification: the model may not be capturing the right relationship between the predictors and the outcome. However, the pattern is very similar across all models, which are capturing different relationships here (e.g. linear model captures linearity between the predictors and the outcome, glmm captures log-linearity, tree based capture complex non linearity) suggests that it may not be the issue with any one model specification.
+
+* unobservables: there are likely to be omitted variables that are missing from our dataset that are correlated with YC and possibly with some of the the predictors. This could also be due to uncaptured interactions, as we were unable from including all possible interactions in the linear models (too much memory required to include home team and away team interactions). 
+
+It is most likely that the outcome in question, YCs, is too noisy and the available variables from the dataset cannot capture the variability in the outcome. For example, it is likely that an unpredictable flare up or bust up that occurred between the two teams caused a series of YCs, which cannot be captured by the goal supremacy, teams, attendance etc. 
+
+It is also very likely that the model has been biased towards the high imbalance in the dataset, where most of the data come from games with 1 or 2 YCs, where the latter is the mode of the distribution. Collectively, they make up `r round(nrow(data_2_reshaped_imputed_5 %>% filter(yellow_cards == 1 |yellow_cards == 2)) / nrow(data_2_reshaped_imputed_5),2)*100` % of the number of teams (per match).
+
+
+
+```{r PLOT-test-data-residual-analysis, warning = F, fig.cap="Residual Analysis across models (Test set)"}
+
+## Populating test_resid_data done on separate R file titled: "FINAL_MODELS_COMPARISON_KABLES.R"
+load("../testing/test_residual_data")
+
+## Reshape table 
+test_residual_data_long <- pivot_longer(test_residual_data, 
+                                   cols = starts_with("resid_"), ## column names (i.e. model names )
+                                   names_to = "Model", ## end point for column names 
+                                   values_to = "Residuals") ## values of interest
+
+
+## PLOT RESID DISTRIBUTION PER MODEL 
+ggplot(test_residual_data_long, aes(x = as.factor(yellow_cards), y = Residuals, fill = Model)) +
+  geom_violin(scale = "width", trim = FALSE) +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +  # Add the horizontal line at y = 0
+  labs(x = "Actual Yellow Cards", y = "Residuals",
+       title = "Test Residuals Distribution") +
+  facet_wrap(~ Model, ncol = 2, scales = "free_y") +
+  theme_minimal() +
+    coord_cartesian(ylim = c(-max(abs(test_residual_data_long$Residuals)), max(abs(test_residual_data_long$Residuals))))
+
+```
+
+
+# Limitations 
+
+If goals are considered hard to predict, cards are arguably much more random. Goals are a function of ability and are positive actions that help achieve the game objective, whereas cards are generally undesirable. Bust-ups can happen in a game, where an anomalously high number of cards are awarded which may be hard to fully capture with the current predictors.
+
+Poisson models also give non-0 distributions to all positive integers, where in this case we clearly have an upper limit to the number of possible YCs in a game.
+
+There are also card accumulation rules that we fail to consider in this research. For example, if a player has already accumulated a number of YCs, he could be suspended for the a certain number of subsequent games (rules vary between leagues). A player who has already collected a few YCs is likely to be more cautious to refrain from hitting the threshold for a suspension. To factor this in, we would require player-specific data on card accumulation. 
+
+# High dimensionality and multicollinearity {#multicollin}
+
+One particular area of multiple linear regression (LMs and GLMs) that we have not sufficiently looked into is multicollinearity, which can affect linear regression fundamentally, from the standard sums of squares analysis to estimated coefficients and to predictions (Lexi V. Perez, 2017).
+
+Previously, we were unable to use standard multicollinearity checks,such as the variable inflation factor, due to the presence of high cardinality categorical variables. As in our case, when trying to use the `vif` function from `car` package, it returns an error specifying 'aliased coefficients in the model' which is a common result of including highly cardinal variables. Nevertheless, we went ahead with the models also in part to preserve interpretability, in the form of coefficients of predictors from summary output tables, which would otherwise be lost with dimensionality reduction techniques such as PCA. 
+
+Multicollinearity has particularly detrimental effects, namely:
+
+* large standard errors for coefficients, which makes them highly unstable and unreliable (Alin, A. 2010)
+
+* 'partial regression coefficient' interpretation, refers to the effect of one unit increase in the predictor on the outcome variable, when all other variables are held constant, becomes not applicable due to collinearity between the problematic predictor and others (Alin, A. 2010)
+
+* usual inferences, such as hypothesis testing, become unreliable (Alin, A. 2010)
+
+* modelling packages (such as with lme4 mixed effect models) become inaccurate due to singular and ill-conditioned information matrices and having to invert them (Aguilera et al. 2006)
+
+Even after removing the 3 categorical variables (referee, team, opponent), we are left with 19 predictors of which 14 are numeric. Thus we have high dimensionality and possible multicollinearity, which we can investigate for numeric variables. 
+
+## Examining the correlation coefficients
+
+```{r correlation-between-predictors, results='hide'}
+## Get the numeric subset of the main dataset
+numeric_subset <- data_2_reshaped_imputed_5 %>% select(-caseweights_by_recency,-days_elapsed) %>% select(where(is.numeric)) %>% mutate(home = as.numeric(home), total_goals_implied_scaled = as.numeric(total_goals_implied_scaled)) 
+
+
+##### Correlation table -----
+## Correlation table
+cor_matrix <- cor(numeric_subset)
+## Turn into a vector
+cor_vector <- cor_matrix[lower.tri(cor_matrix, diag = FALSE)]
+#boxplot(cor_vector, breaks = 15, ylab = "Corr coeffs")
+threshold <- 0.4
+sum(abs(cor_vector) > threshold)
+
+```
+
+
+
+```{r visualise-correlation-1, fig.cap="Distribution of correlation coefficients", out.width="70%"}
+boxplot(cor_vector, breaks = 15, ylab = "Corr coeffs")
+```
+
+From Fig \@ref(fig:visualise-correlation-1), we can the spread of correlation coefficients. Most of them are close to 0, which is desirable, however we have outliers close to the extremes of 1 and -1. Of the `r length(cor_vector)` possible pairs of predictors, 6 of them had a correlation coefficient of above 0.5, and 10 above 0.4. 
+
+```{r visualise-correlation-2, fig.cap="Distribution of correlation coefficients", out.width="70%"}
+##### Correlation visualisations -----
+## Correlation table via corrplot
+library(corrplot)
+corrplot(cor(numeric_subset))
+
+## Correlation table/ network plot via corrr
+# library(corrr)
+# numeric_subset %>% correlate %>% network_plot()
+
+```
+
+
+The correlation table in Fig \@ref(fig:visualise-correlation-2) displays the magnitude and direction of correlation of all pairs of predictors, with the darkest colours having the highest magnitutde, and we can already see some conspicuous dots. Some of the (obvious) pairs include: stadium distance and `home` (only relevant for away team), stadium capacity is positively correlated with attendance, etc. 
+
+
+## Principal Component Analysis (PCA) and Principal Component Regression (PCR)
+
+PCA is a dimensionality reduction technique used to reduce a large set of variables that have some degree of collinearity to a smaller and less correlated subset, which are called principle components (PCs). Ideally, the first few PCs are enough to capture most of the information of the original data, as the PCs themselves are a set of linear combinations of predictors (Lexi V. Perez, 2017). We then regress the outcome on the new set of regressors (PCs) to perform PCR, with the assumption that the directions of most variance of the original predictors are associated with the outcome. 
+
+The main ideas are (taken from S. Jackson (2023)) : 
+
+$$ Z_k = \sum_{j = 1}^{p}{\phi_{jk}X_j} $$ for $Z_k, k = 1,...,q$ are the q PCs, $X_1....X_p$ are the original p predictors, where $q <le p$, and $\phi_{1k},...\phi_{pk}$ are constant coefficients to the original p predictors, thus representing a linear combination 
+
+Then, we fit the model for PCR :
+
+$$ y_i = B_0 + \sum_{k = 1}^{q}{B_k z_{ik}}$$ for $i = 1,...,n$ (all observations), representing a reduction in number of parameters from p+1 to q+1
+
+The PCs are found via solving for the $\phi_{1k},...\phi_{pk}$ coefficients for the $kth$ PC, which involves maximising its variance and ,via Lagrange multiplier methods, leads to the solving of eigenvectors and eigenvalues of the sample correlation matrix. More theory on PCA can be read from Lexi V. Perez (2017).
+
+## Running the PCA
+
+We try to reduce the dimensions and resolve the multicollinearity issues with the help of PCA, for the numeric columns. We then try to rebind the output of the PCA with the other variables (such as the categorical variables), and re-run the regression models to see if there have been any improvements in prediction results. 
+
+```{r PCA, fig.cap="Principle Components", cache = T}
+## Subset the NUMERIC variables to perform PCA
+pca_vars <- data_2_reshaped_imputed_5  %>% select(-caseweights_by_recency,-days_elapsed,-yellow_cards) %>% select(where(is.numeric))
+
+## Subset the excluded variables
+excluded_vars <- data_2_reshaped_imputed_5 %>%
+  select(setdiff(names(data_2_reshaped_imputed_5), names(pca_vars)))
+
+## CONDUCT PCA ON THE NUMERIC COLUMNS -------- 
+## --- standardise those columns that havent already been
+pca_vars_scaled <- pca_vars %>%
+  mutate_all(scale)
+
+## perform pca 
+pca_results <- prcomp(pca_vars_scaled, center = T, scale. = T)
+summary(pca_results)
+
+## scree plot to choose principle components
+grid.arrange(factoextra::fviz_eig(pca_results, addlabels = T, ylim = c(0,25)),
+factoextra::fviz_pca_biplot(pca_results,
+                label="var"), ncol = 2)
+
+
+## retain only 6 of the PCs
+pca_retained <- as.data.frame(pca_results$x[, 1:6])
+
+## combine with excluded to get PCA-reduced dataset
+PCA_reduced_data <- bind_cols(excluded_vars, pca_retained)
+```
+
+We choose the first 6 principle components, which captures about 76% total variance, as displayed in the Scree Plot in Fig \@ref(fig:PCA). This represents a reduction of 14 numeric columns to 6 principle components, which is a `r 1 -round(6/14,1)` proportion reduction in number of numeric predictors. The Biplot in Fig \@ref(fig:PCA) shows the association between the first two PCs and the predictors, and we can see that the first PC correlates positively with `season`, `covid_impacted`, negatively with stadium crowd density and attendance, while the second PC correlated positively with `home`, `supremacy_implied_scaled` (standardised version of `sup_implied`), while varying negatively with `stadium_dist`. This gives us an intuitive sense of the information that each PC is trying to capture. 
+
+## Refitting the linear models 
+
+With the reduced numeric space, we refit the models again and check the results of the performance on the test set. 
+
+```{r PCA-reduced-data-model refit}
+## REFITTING OF MODELS WITH PCA-REDUCED-DATA DONE ON SEPARATE FILE 
+load("../testing/pca_processed_models")
+load("../testing/full_test_PCA")
+
+## PREDICT AND GET TEST ERRORS ========================================
+pca_lm_rmse <- test_rmse_generator(PCA_total_linear_model, full_test_PCA)
+pca_glm_rmse <- test_rmse_generator(PCA_total_glm, full_test_PCA)
+pca_lmm_rmse <- test_rmse_generator(PCA_total_lmm_not_nested, full_test_PCA)
+pca_glmm_rmse <- test_rmse_generator(PCA_total_glmm_not_nested, full_test_PCA)
+
+
+## GET INTERNAL RMSE ==================================================
+i_lm<-sqrt(mean(PCA_total_linear_model$residuals^2))
+i_glm<-sqrt(mean(PCA_total_glm$residuals)^2)
+i_lmm<-sqrt(mean(residuals(PCA_total_lmm_not_nested)^2))
+i_glmm<-sqrt(mean(residuals(PCA_total_glmm_not_nested)^2))
+
+
+## APPEND TO TABLE 
+new_rows <- data.frame(model = c("(PCA) LM", "(PCA) LMM", "(PCA) GLM", "(PCA) GLMM"), 
+                       AIC = c(AIC(PCA_total_linear_model), AIC(PCA_total_lmm_not_nested), AIC(PCA_total_glm), AIC(PCA_total_glmm_not_nested)),
+                       Internal.RMSE = c(i_lm, i_lmm, i_glm, i_glmm), 
+                       Test.RMSE = c(pca_lm_rmse,pca_lmm_rmse,pca_glm_rmse,pca_glmm_rmse))
+
+## Compare linear models to linear models after PCA
+pca_comparison_table <- final_comparison_table %>% bind_rows(new_rows) %>% arrange(Test.RMSE) #%>% filter(str_detect(model, "LM"))
+
+## for cell formatting for kable styling 
+pca_rows <- which(str_detect(pca_comparison_table$model, "(PCA)"))
+pca_rows2 <- which(str_detect(pca_comparison_table$model, "LM"))
+
+```
+
+
+
+```{r PLOT-PCR-vs-LM, fig.cap="Does PCA-preprocessed data help with training linear models?"}
+## Only for the linear models where PCA data was fitted to
+PCA_long_comparison_table <- pca_comparison_table%>% filter(str_detect(model, "LM")) %>% select(-AIC) %>% 
+  gather(key = "Metric", value = "Value", -model) %>% replace_na(list(Value = 0)) %>% mutate(PCA = ifelse(str_detect(model, 'PCA'), "w PCA", "w/o PCA")) %>% mutate(model = str_replace(model, "\\(PCA\\) ", ""))
+
+
+ggplot(PCA_long_comparison_table, aes(x = PCA, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") + 
+  facet_grid(~model)+
+  labs(title = "PCA preprocessing for linear models", 
+       y = "RMSE", 
+       x = "Model") +
+  theme_minimal() + 
+  scale_fill_brewer(palette = "Set2", name = "Metric") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+There is noticeable change in the test error when the linear regression models were first preprocessed with PCA (PCR models). In Fig \@ref(fig:PLOT-PCR-vs-LM), we see that across the board, test error went down, although training error was more stable. This could suggest that PCA helps to regularise the parameters which helps in generalising. 
+
+```{r comparison-table-w-pcr}
+## KABLE 
+kable(pca_comparison_table, caption = "Comparison with new PCR models") %>% kable_styling(full_width = T) %>%  add_header_above(c(" " = 1, "Internal" = 2, "External" = 1)) %>% 
+  kable_classic_2() %>% 
+  row_spec(pca_rows2, background = 'grey') %>%
+  row_spec(pca_rows, background = 'lightgrey')  
+```
+
+When comparing across all models including the tree-based ones, we see that the linear models that benefited from PCA overtook the random forest models as the best performing models on test data, but did not affect the relative positions of the GLMs. 
+
+Despite the improvements, there is still clearly room for improvement on the lowest test error of `r round(pca_comparison_table$Test.RMSE[1],2)`, which effectively means that the best model still is off by that number of cards per team, per game, on average. This might reaffirm the possibility that the main issue is not the data that we have, but rather the data that we do not. In order to effectively predict YCs, it seems that much more data is still required. 
+
+# Conclusion
+
+Predicting YCs is still a very difficult task, with so much unexplained variation due to variables that we do not have, not least from the dataset that we have been provided. It is very likely that YCs are determined on the pitch itself, and any game would find itself with hundreds of game events that would go into determining the cards handed out by the referee. Hence despite the dataset we are presented with, predicting YCs may require more variables and possibly more granular data. 
+
+From our models we see that simplicity still wins. Linear models, with the benefit of interpretability, narrowly lost out to the random forest models in test error while having significantly less train error. Generalised linear models that account for the distribution of the outcome allowed for a much better fit, with both AIC and internal error, but suffered with around double of the test error. Standard gradient boosted models were more ill-fitted than the already poor GLMs, but when mixed effects were taken into account in Sigrist's model, the performance improved drastically to that of the random forests. 
+
+
+# Appendix 
+
+## Negative Binomial models
+
+### England only
+
+We repeat the Poisson GLM analysis in section 'Model 2', but with Negative Binomial distributions instead. Unfortunately, NB models are not supported in `geepack`, hence was omitted. 
+
+```{r NB-models, warning=FALSE}
+library(geepack)
+
+## NB models fitted in separate file titled REPEAT_GLMs_OTHER_COUNTRIES_CODE.R"
+
+load("../testing/NB-models")
+
+```
+
+```{r NB-models-internal-comparisons}
+Eng_test$opponent <- droplevels(Eng_test$opponent)
+NB_glm_internal_metrics <- compare_performance(model_2.1_standardglm_NB, model_2.2_glmm_NB, 
+                    metrics = c('AIC', "BIC"),verbose = F)
+
+## Prepare an empty data frame to store the results
+comparison_table <- data.frame(Model = character(), Test_RMSE = numeric())
+
+## List of models
+models <- list(model_2.1_standardglm_NB = model_2.1_standardglm_NB, 
+               model_2.2_glmm_NB = model_2.2_glmm_NB)
+
+## Loop through models and calculate RMSE for each
+for(model_name in names(models)) {
+  model <- models[[model_name]]
+  
+  ## Predict on test data
+  predictions <- predict(model, newdata = Eng_test, type = 'response')
+  
+  ## Calculate RMSE and add to the comparison table
+  rmse <- calculate_rmse(predictions, Eng_test$yellow_cards)
+  comparison_table <- rbind(comparison_table, data.frame(Name = model_name, Test_RMSE = rmse))
+}
+
+## KABLE FOR NEGATIVE BINOMIAL
+kable(comparison_table %>% right_join(NB_glm_internal_metrics, by = 'Name') %>% select(Model,  AIC, BIC,Test_RMSE),
+      caption = "NB GLMs comparisons", 
+      align = "c") %>% kable_styling(latex_options = "HOLD_position") %>% kable_classic_2() %>%
+    add_header_above(c(" " = 1,"Internal Metrics" = 2, "External Metric" = 1))
+
+```
+
+```{r calclating-NB-for-other-countries}
+## Code was made in the same file for Poisson GLMs for all other countries
+
+##
+load("../testing/repeat_glms_othercountries_NB")
+
+## Make kable for comparison
+performance_table_nb$Country <- rep(country_list[2:5], each = 3)
+performance_table_nb$Name <- RMSE_test_table_nb$Name
+RMSE_test_table_nb$Country <- rep(country_list[2:5], each = 3)
+NB_comparison_table <- performance_table_nb %>% left_join(RMSE_test_table_nb, by = c('Country', "Name"))
+
+```
+
+```{r kable-NB-GLM-country-comparison}
+NB_kable <-kable(NB_comparison_table %>% select(Country, Model, AIC, RMSE, test_RMSE), caption = "Linear Models for all Countries", 
+      align = 'c')%>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  add_header_above(c("Linear Models" = 2,"Internal Metrics" = 2, "External Metric" = 1)) %>%
+  row_spec(row = c(1,2,3,7,8,9), background = "#D3D3D3") %>%
+  kable_classic_2() #%>% 
+#  footnote(general = c("Upon latest fit, Germany and Italy returned a boundary singular fit, likely for glmer - proceed with caution"))
+
+NB_kable
+```
+
+## England dataset models: full LM and GLM output
+
+```{r summary-output-eng-linear-models}
+## Output for England linear model
+kable(summary(model_1.5_linear_home_itns) %>% geepack::tidy() %>% mutate(across(where(is.numeric), round, digits = 3)),
+      longtable = T,
+      caption = "Full dataset: Linear Model") %>% kable_styling(latex_options = "HOLD_position")
+
+## Output for England GLM
+kable((summary(model_2.1_standardglm)$coefficients) %>% as.data.frame()%>% mutate(across(where(is.numeric), round, digits = 3)),
+      longtable = T,
+      caption = "Full dataset: Generalised Linear Model (Poisson, log-link)")%>% kable_styling(latex_options = "HOLD_position")
+
+```
+
+
+## Full dataset models 
+
+```{r kable-total-linear-model-coeffs}
+## Summary outputs 
+## 1. For total linear model (fixed effects)
+kable(summary(total_linear_model) %>% geepack::tidy(), longtable = T, 
+      caption = "Output for Linear model with entire dataset") %>% kable_styling(latex_options = "HOLD_position")%>% kable_classic() 
+
+
+```
+
+```{r total-mixed-eff-models, results='asis'}
+library(texreg)
+
+## 2. For total linear mixed effects model
+texreg(total_lmm_not_nested,
+      caption = "Output for Linear mixed model with entire dataset",
+      longtable = T,
+      use.packages = F)
+#
+## 3. For GENERALISED total linear mixed effects model
+texreg(total_glmm_not_nested,
+      caption = "Output for Generalised linear mixed model with entire dataset",
+      longtable = T,
+      use.packages = F)
+
+```
+
+
+
